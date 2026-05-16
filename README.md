@@ -20,7 +20,7 @@ Built as a standalone module for the **SpendLens** procurement intelligence plat
 
 | Dimension | Weight | Source |
 |---|---|---|
-| Sanctions & Watchlists | 25% | OpenSanctions matching API |
+| Sanctions & Watchlists | 25% | OFAC SDN + UN SC Consolidated List (free XML, no API key) |
 | LkSG / CSDDD Compliance | 20% | BAFA, NCP, ECCHR/NGO (via Serper) |
 | Company Registry | 15% | NorthData, Unternehmensregister (via Serper) |
 | News Sentiment | 15% | newsapi.ai (Event Registry) - last 90 days |
