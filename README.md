@@ -1,31 +1,116 @@
 # Hades — Supplier Due Diligence Agent
 
-Hades is the gatekeeper of the SpendLens procurement stack. It autonomously researches any company and generates a structured due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and Hermes ongoing intelligence — in under 2 minutes.
+**Hades** is the gatekeeper of the SpendLens procurement stack. It autonomously researches any supplier and generates a structured due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and live Hermes market intelligence — in under 2 minutes. No manual research. No spreadsheets.
 
-> **SpendLens stack:** Hermes (market intelligence) · **Hades** (supplier vetting) · SpendLens (spend analytics)
+> **SpendLens procurement stack:** Hermes (market intelligence) · **Hades** (supplier vetting) · SpendLens (spend analytics)
+
+**Live:** `https://hades-production-b86a.up.railway.app`
 
 ---
 
-## What it does
+## Screenshot
 
-`POST /investigate` with a company name, category, and country returns a full structured DD report with:
+![Hades — Bosch investigation, High risk, score 5.0, investigation pipeline complete](screenshots/Screenshot%202026-05-16%20205825.png)
 
-- **Risk score** across 6 dimensions (1-10 each, weighted overall)
-- **Recommendation**: Approve / Conditional Approval / Block
+---
+
+## What Hades Does
+
+Send `POST /investigate` with a company name, category, and country. Hades runs 6 parallel research pipelines and returns a full structured risk report with:
+
+- **Overall risk score** (1–10, weighted across 6 dimensions)
+- **Recommendation**: `Approve` / `Conditional Approval` / `Block`
 - **Executive summary** in plain language
-- **Required next steps** when risk is elevated
-- **Hermes integration**: reads prior intelligence pre-flight, registers new suppliers post-report
+- **Company registry details** — HRB number, Amtsgericht, legal status
+- **Sanctions status** — OFAC SDN + UN SC Consolidated List
+- **LkSG/CSDDD compliance signal** — `no_findings` / `needs_monitoring` / `red_flag`
+- **ESG & labour risk** — EcoVadis, ILO, Transparency Intl, Violation Tracker
+- **Required next steps** surfaced to the procurement manager
+- **Hermes integration** — reads prior intelligence pre-flight, registers new suppliers post-report for ongoing monitoring
 
-### Risk dimensions
+### Risk Score Weights
 
-| Dimension | Weight | Source |
+| Dimension | Weight | Data Source |
 |---|---|---|
-| Sanctions & Watchlists | 25% | OFAC SDN + UN SC Consolidated List (free XML, no API key) |
-| LkSG / CSDDD Compliance | 20% | BAFA, NCP, ECCHR/NGO (via Serper) |
-| Company Registry | 15% | NorthData, Unternehmensregister (via Serper) |
-| News Sentiment | 15% | newsapi.ai (Event Registry) - last 90 days |
+| Sanctions & Watchlists | 25% | OFAC SDN XML + UN SC Consolidated List (free, no API key) |
+| LkSG / CSDDD Compliance | 20% | BAFA, OECD NCP, ECCHR/NGO signals via Serper |
+| Company Registry | 15% | NorthData + Unternehmensregister via Serper |
+| News Sentiment | 15% | newsapi.ai (Event Registry) — last 90 days |
 | ESG & Labour | 15% | EcoVadis, ILO, Transparency Intl, Violation Tracker |
-| Hermes Intelligence | 10% | Upstash Redis - SpendLens market signals |
+| Hermes Intelligence | 10% | Upstash Redis — live SpendLens market signals |
+
+**Risk thresholds:** Low = 1.0–3.9 · Medium = 4.0–6.4 · High = 6.5–7.9 · Critical = 8.0–10.0
+
+**Hard rules always enforced by Claude:**
+- Sanctioned entity with priority hit → sanctions score ≥ 9, recommendation = Block
+- LkSG red flag → compliance score ≥ 7
+- Dissolved / insolvent company → registry score ≥ 7
+
+---
+
+## Agent Interaction — How Hades Fits the SpendLens Stack
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        SpendLens Platform                           │
+│           (spend analytics, vendor records, approval flows)         │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │  POST /investigate
+                         │  (new vendor onboarding or periodic recheck)
+                         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     HADES  (this agent)                             │
+│                                                                     │
+│   hermes_preflight                                                  │
+│        │── reads Hermes Redis (supplier intel pre-flight)           │
+│        │── if signal_count > 10: skips NewsAPI, uses Hermes data    │
+│        │                                                            │
+│        ├── web_research     (Serper: 4 negative-signal queries)     │
+│        ├── news_sentiment   (newsapi.ai: last 90 days, EN+DE)       │
+│        ├── sanctions_check  (OFAC SDN + UN SC XML, 24h cache)       │
+│        ├── registry_lookup  (NorthData + Unternehmensregister)      │
+│        ├── lksg_signals     (BAFA, NCP, ECCHR/NGO)                  │
+│        └── esg_signals      (EcoVadis, ILO, TI, Violation Tracker)  │
+│                                                                     │
+│   synthesis          ← Claude Sonnet 4.6: scores 6 dimensions      │
+│   report_generator   ← Claude Sonnet 4.6: full structured JSON      │
+│   hermes_register    ← writes supplier to Hermes watchlist          │
+│                                                                     │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │  returns full DD report (60–120s)
+                         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  SpendLens stores on vendor record:                                 │
+│    hades_risk_score · hades_risk_level · hades_recommendation       │
+│    hades_lksg_signal · hades_sanctions_clear · hades_next_steps     │
+└─────────────────────────────────────────────────────────────────────┘
+                         │
+                         │  hermes_register (idempotent)
+                         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     HERMES  (market intelligence agent)             │
+│   Upstash Redis  ←  Hades writes hermes:watchlist:<slug>            │
+│   Hermes crawlers start covering new supplier on next cycle         │
+│   On recheck: Hades reads hermes:supplier:<slug> pre-flight         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### When SpendLens calls Hades
+
+| Trigger | Mode | Effect |
+|---|---|---|
+| New vendor created, pending approval | `"mode": "full"` | Full 6-node research; supplier added to Hermes watchlist |
+| Existing vendor periodic recheck | `"mode": "recheck"` | Same pipeline; Hermes data pre-loaded if tracked |
+
+### What Hades writes back
+
+SpendLens gates the onboarding decision on `report.recommendation`:
+
+| Value | Meaning |
+|---|---|
+| `Approve` | Low risk — auto-approve or standard review |
+| `Conditional Approval` | Medium/elevated risk — procurement manager review required |
+| `Block` | Critical risk or sanctions hit — vendor blocked |
 
 ---
 
@@ -33,25 +118,25 @@ Hades is the gatekeeper of the SpendLens procurement stack. It autonomously rese
 
 ```
 POST /investigate
-       |
-  hermes_preflight          <- reads Hermes Redis; skips news if signal_count > 10
-       |
-  +----+------------------------------------------+
-  | (parallel LangGraph fan-out)                  |
-  web_research   news_sentiment   sanctions_check  |
-  registry_lookup   lksg_signals   esg_signals    |
-  +--------------------+--------------------------+
-                       |
-                   synthesis                       <- Claude Sonnet 4.6: scores 6 dims
-                       |
-               report_generator                   <- Claude Sonnet 4.6: full JSON report
-                       |
-               hermes_register                    <- writes new supplier to Hermes watchlist
-                       |
-                     END
+       │
+  hermes_preflight          ← reads Hermes Redis; skips NewsAPI if signal_count > 10
+       │
+  ┌────┴──────────────────────────────────────────────┐
+  │            parallel LangGraph fan-out             │
+  │  web_research   news_sentiment   sanctions_check  │
+  │  registry_lookup   lksg_signals   esg_signals     │
+  └────────────────────────┬──────────────────────────┘
+                           │
+                       synthesis              ← Claude Sonnet 4.6: scores 6 dimensions
+                           │
+                   report_generator          ← Claude Sonnet 4.6: full structured JSON
+                           │
+                   hermes_register           ← writes supplier to Hermes watchlist
+                           │
+                         END
 ```
 
-**Stack**: FastAPI - LangGraph (StateGraph) - Claude Sonnet 4.6 - Upstash Redis - Serper - newsapi.ai - OpenSanctions
+**Stack:** FastAPI · LangGraph StateGraph · Claude Sonnet 4.6 · Upstash Redis · Serper · newsapi.ai · OFAC SDN XML · UN SC XML
 
 ---
 
@@ -68,56 +153,83 @@ POST /investigate
 }
 ```
 
-**Response** (abbreviated):
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `company` | string | yes | Legal company name |
+| `category` | string | yes | Procurement category |
+| `country` | string | no | ISO-2 country code (default: `"DE"`) |
+| `mode` | string | no | `"full"` (default) or `"recheck"` |
+
+**Response** (key fields):
 
 ```json
 {
   "company": "Robert Bosch GmbH",
+  "hermes_registered": true,
+  "risk_scores": {
+    "overall_risk_score": 4.7,
+    "risk_level": "Medium",
+    "recommendation": "Conditional Approval",
+    "scores": {
+      "sanctions":           { "score": 4, "rationale": "No direct OFAC or UN SC match found." },
+      "registry":            { "score": 2, "rationale": "Active GmbH, HRB 14000 Stuttgart." },
+      "news_sentiment":      { "score": 2, "rationale": "Neutral coverage, no high-severity events." },
+      "lksg_csddd":          { "score": 7, "rationale": "12 flagged BAFA/NGO findings." },
+      "esg_labour":          { "score": 6, "rationale": "4 negative signals, labour rights concerns." },
+      "hermes_intelligence": { "score": 3, "rationale": "Not previously tracked by Hermes." }
+    },
+    "top_risk_factors": ["LkSG exposure in Tier-2 supply chain", "..."],
+    "positive_signals":  ["Listed company, public reporting", "..."]
+  },
   "report": {
     "overall_risk_score": 4.7,
     "risk_level": "Medium",
     "recommendation": "Conditional Approval",
     "executive_summary": "...",
-    "company_overview": { "hrb": "HRB 14000", "amtsgericht": "Amtsgericht Stuttgart" },
-    "sanctions_status": { "is_sanctioned": null, "manual_review_required": true },
-    "lksg_csddd_assessment": { "compliance_signal": "red_flag", "flagged_count": 12 },
-    "esg_labour": { "esg_rating": "high_risk" },
-    "hermes_intelligence": { "tracked_by_hermes": false, "monitoring_status": "Added to monitoring today" },
-    "required_next_steps": ["...", "..."]
-  },
-  "hermes_registered": true
+    "company_overview": {
+      "legal_name": "Robert Bosch GmbH",
+      "hrb": "HRB 14000",
+      "amtsgericht": "Amtsgericht Stuttgart",
+      "company_status": "active"
+    },
+    "sanctions_status": {
+      "is_sanctioned": false,
+      "eu_fsf_manual_required": true,
+      "manual_review_required": false
+    },
+    "lksg_csddd_assessment": {
+      "compliance_signal": "red_flag",
+      "flagged_count": 12
+    },
+    "required_next_steps": ["Request LkSG self-declaration", "..."]
+  }
 }
 ```
 
 ### `GET /health`
 
 ```json
-{ "status": "ok", "agent": "supplier-dd-agent", "version": "0.1.0" }
+{ "status": "ok", "agent": "hades", "version": "0.1.0" }
 ```
 
 ---
 
-## Hermes read/write flow
+## Demo Scenarios
 
+Run `demo/run_demo.py` with the server live (`uvicorn main:app --reload`):
+
+```bash
+python demo/run_demo.py
 ```
-Pre-flight:  get_vendor_intel(company)  -> if tracked + signal_count > 10 -> skip NewsAPI
-Post-report: register_vendor(company)   -> idempotent; adds to Hermes watchlist for crawlers
-```
-
-The agent always runs sanctions, registry, and LkSG checks at full depth regardless of Hermes coverage.
-
----
-
-## Demo scenarios
-
-Run `demo/run_demo.py` with the server live. Results from live run:
 
 | Scenario | Company | Score | Risk | Recommendation |
 |---|---|---|---|---|
-| Clean DACH supplier (new) | Schindler Group (CH) | 5/10 | Medium | Conditional Approval |
-| LkSG/ESG-exposed | H&M Group (SE) | 6/10 | High | Conditional Approval |
-| Geopolitical + sanctions risk | Huawei Technologies (CN) | 7/10 | High | **Block** |
-| Re-check (Hermes delta) | Schindler Group (CH) | 4/10 | Medium | Conditional Approval |
+| Clean DACH supplier (new to Hermes) | Schindler Group (CH) | 5.0 | Medium | Conditional Approval |
+| LkSG/ESG-exposed supplier | H&M Group (SE) | 6.0 | High | Conditional Approval |
+| Geopolitical + sanctions adjacency | Huawei Technologies (CN) | 7.0 | High | Block |
+| Re-check — Hermes delta visible | Schindler Group (CH) | 4.0 | Medium | Conditional Approval |
+
+Scenario 4 demonstrates the Hermes feedback loop: Schindler was added to the watchlist in Scenario 1; on re-check, `tracked_by_hermes: true` and Hermes pre-flight data is visible in the score.
 
 ---
 
@@ -126,21 +238,22 @@ Run `demo/run_demo.py` with the server live. Results from live run:
 ### Requirements
 
 - Python 3.11+
-- API keys: Anthropic, Serper.dev, newsapi.ai (Event Registry), OpenSanctions, Upstash Redis
+- API keys: Anthropic, Serper.dev, newsapi.ai (Event Registry), Upstash Redis
 
 ### Local run
 
 ```bash
-git clone https://github.com/eugnmueller-87/supplier-dd-agent.git
-cd supplier-dd-agent
+git clone https://github.com/eugnmueller-87/hades.git
+cd hades
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
-cp .env.example .env        # fill in your API keys
+cp .env.example .env          # fill in your keys
 uvicorn main:app --reload
 ```
 
-Then:
+Quick test:
 
 ```bash
 curl -X POST http://localhost:8000/investigate \
@@ -150,55 +263,73 @@ curl -X POST http://localhost:8000/investigate \
 
 ### Environment variables
 
-See [`.env.example`](.env.example) for all required variables.
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+SERPER_API_KEY=...
+NEWSAPI_KEY=...                        # newsapi.ai UUID format
+UPSTASH_REDIS_REST_URL=https://...
+UPSTASH_REDIS_REST_TOKEN=...
+```
+
+Hades validates all 5 variables at startup and refuses to start if any are missing.
 
 ---
 
-## Project structure
+## LkSG / CSDDD Context
 
-```
-supplier-dd-agent/
-+-- main.py                          # FastAPI entry point (loads .env)
-+-- api/routes.py                    # POST /investigate, GET /health
-+-- agent/
-|   +-- state.py                     # DDState TypedDict
-|   +-- graph.py                     # LangGraph StateGraph
-|   +-- prompts.py                   # SYNTHESIS_PROMPT, REPORT_PROMPT
-|   +-- nodes/
-|       +-- hermes_preflight.py      # Read Hermes pre-flight
-|       +-- web_research.py          # Serper web research
-|       +-- news_sentiment.py        # newsapi.ai 90-day sentiment
-|       +-- sanctions_check.py       # OpenSanctions matching API
-|       +-- registry_lookup.py       # NorthData / Handelsregister
-|       +-- lksg_signals.py          # BAFA, NCP, ECCHR/NGO signals
-|       +-- esg_signals.py           # EcoVadis, ILO, TI, labour
-|       +-- synthesis.py             # Claude: risk scoring
-|       +-- report_generator.py      # Claude: full DD report
-|       +-- hermes_register.py       # Write supplier to Hermes
-+-- integrations/
-|   +-- hermes_client.py             # Upstash Redis client
-|   +-- spendlens_connector.py       # SpendLens integration stub
-+-- demo/run_demo.py                 # 4-scenario live demo
-```
+The **Lieferkettensorgfaltspflichtengesetz (LkSG)** — German Supply Chain Due Diligence Act — has been in force since January 2023 for companies with 1,000+ employees. It mandates risk-based due diligence across the full supply chain: human rights, environmental obligations, and grievance mechanisms.
+
+The EU **CSDDD** (Corporate Sustainability Due Diligence Directive) extends equivalent requirements across all EU member states from 2026.
+
+Hades checks three authoritative sources for LkSG/CSDDD signals:
+
+- **BAFA** (Bundesamt für Wirtschaft und Ausfuhrkontrolle) — enforcement authority for LkSG
+- **OECD NCP** — National Contact Point complaints under OECD Guidelines for Multinational Enterprises
+- **NGO reports** — ECCHR, Germanwatch, Femnet e.V., and civil society organisations
 
 ---
 
-## LkSG / CSDDD context
+## Project Structure
 
-The **Lieferkettensorgfaltspflichtengesetz (LkSG)** - German Supply Chain Due Diligence Act - has been in force since January 2023. It requires companies with 1,000+ employees to conduct risk-based due diligence across their full supply chain, including human rights and environmental obligations.
-
-The EU **CSDDD** (Corporate Sustainability Due Diligence Directive) extends similar requirements across the EU from 2026. This agent specifically checks:
-
-- **BAFA** (Bundesamt fuer Wirtschaft und Ausfuhrkontrolle) - the German enforcement authority for LkSG
-- **OECD NCP** - National Contact Point complaints under OECD Guidelines for Multinational Enterprises
-- **NGO reports** - ECCHR, Germanwatch, Femnet e.V., and similar civil society organisations
+```
+hades/
+├── main.py                          # FastAPI entry point — loads .env, validates env vars
+├── api/
+│   └── routes.py                    # POST /investigate, GET /health
+├── agent/
+│   ├── state.py                     # DDState TypedDict — full pipeline state schema
+│   ├── graph.py                     # LangGraph StateGraph — fan-out/fan-in wiring
+│   ├── prompts.py                   # SYNTHESIS_PROMPT, REPORT_PROMPT (Claude)
+│   └── nodes/
+│       ├── _utils.py                # parse_json_response() — shared JSON helper
+│       ├── hermes_preflight.py      # Pre-flight: read Hermes Redis intel
+│       ├── web_research.py          # 4 Serper queries, negative-signal flagging
+│       ├── news_sentiment.py        # newsapi.ai — last 90 days, EN+DE
+│       ├── sanctions_check.py       # OFAC SDN + UN SC XML, 24h in-memory cache
+│       ├── registry_lookup.py       # NorthData + Unternehmensregister
+│       ├── lksg_signals.py          # BAFA, NCP, ECCHR/NGO signals
+│       ├── esg_signals.py           # EcoVadis, ILO, TI, Violation Tracker
+│       ├── synthesis.py             # Claude Sonnet 4.6: score 6 risk dimensions
+│       ├── report_generator.py      # Claude Sonnet 4.6: full structured DD report
+│       └── hermes_register.py       # Post-report: write supplier to Hermes watchlist
+├── integrations/
+│   ├── hermes_client.py             # Upstash Redis client (shared with Hermes)
+│   └── serper_client.py             # Shared Serper search function
+├── demo/
+│   └── run_demo.py                  # 4-scenario live demo script
+└── screenshots/                     # Demo screenshots
+```
 
 ---
 
 ## Part of SpendLens
 
-This agent is a module of the **SpendLens** procurement intelligence stack:
+**Hades** is one of three agents in the SpendLens procurement intelligence stack:
 
-- **SpendLens** - AI spend analysis and vendor categorisation
-- **Hermes** - ongoing market intelligence and signal monitoring
-- **Supplier DD Agent** - autonomous supplier due diligence (this repo)
+| Agent | Role | Trigger |
+|---|---|---|
+| **SpendLens** | Spend analytics, vendor records, approval workflows | User-facing platform |
+| **Hermes** | Ongoing market intelligence — crawls signals, monitors watchlist vendors | Scheduled / event-driven |
+| **Hades** | Autonomous supplier due diligence — gates vendor onboarding decisions | Called by SpendLens at onboarding + periodic recheck |
+
+Hades and Hermes share the same Upstash Redis instance. Every vendor Hades investigates is automatically added to the Hermes watchlist, so Hermes crawlers begin monitoring them from the next cycle. On subsequent Hades rechecks, Hermes data is pre-loaded into the risk score.
