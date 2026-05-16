@@ -1,8 +1,5 @@
-import os
-import httpx
 from agent.state import DDState
-
-SERPER_URL = "https://google.serper.dev/search"
+from integrations.serper_client import serper_search
 
 NEGATIVE_KEYWORDS = [
     "fraud", "scandal", "lawsuit", "fined", "penalty", "bribery", "corruption",
@@ -10,13 +7,6 @@ NEGATIVE_KEYWORDS = [
     "Betrug", "Klage", "Bußgeld", "Strafe", "Bestechung", "Korruption",
     "Insolvenz", "Verstoß", "Ermittlung", "Rückruf", "Pflichtverletzung",
 ]
-
-
-def _serper_search(query: str, gl: str = "de", hl: str = "de", num: int = 5) -> list[dict]:
-    headers = {"X-API-KEY": os.environ["SERPER_API_KEY"], "Content-Type": "application/json"}
-    r = httpx.post(SERPER_URL, headers=headers, json={"q": query, "gl": gl, "hl": hl, "num": num}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("organic", [])
 
 
 def _flag_negative(text: str) -> bool:
@@ -57,7 +47,7 @@ def web_research(state: DDState) -> dict:
 
     for query, label in queries:
         try:
-            raw = _serper_search(query, num=num_results)
+            raw = serper_search(query, num=num_results)
             for r in raw:
                 formatted = _format_result(r, label)
                 results.append(formatted)

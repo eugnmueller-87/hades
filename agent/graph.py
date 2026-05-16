@@ -12,11 +12,6 @@ from agent.nodes.report_generator import report_generator
 from agent.nodes.hermes_register import hermes_register
 
 
-def run_research_nodes(state: DDState) -> DDState:
-    """Run all 6 research nodes — executed via parallel Send in the graph."""
-    return state
-
-
 def build_graph():
     g = StateGraph(DDState)
 

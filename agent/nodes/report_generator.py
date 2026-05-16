@@ -4,6 +4,7 @@ from datetime import datetime
 import anthropic
 from agent.state import DDState
 from agent.prompts import REPORT_PROMPT
+from agent.nodes._utils import parse_json_response
 
 
 def _summarise(data: dict | list, max_chars: int = 1500) -> str:
@@ -35,13 +36,22 @@ def report_generator(state: DDState) -> dict:
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = message.content[0].text.strip()
+    raw = (message.content[0].text or "").strip()
 
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    try:
+        report = parse_json_response(raw)
+    except ValueError as e:
+        return {
+            "report": {
+                "error": str(e),
+                "report_date": report_date,
+                "company": state["company_name"],
+                "overall_risk_score": None,
+                "risk_level": "Unknown",
+                "recommendation": "Manual Review Required",
+                "executive_summary": "Report generation failed — manual review required.",
+                "required_next_steps": ["Review raw research data manually"],
+            }
+        }
 
-    report = json.loads(raw)
     return {"report": report}

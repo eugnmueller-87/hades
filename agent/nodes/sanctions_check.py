@@ -2,12 +2,16 @@
 Sanctions check against OFAC SDN List and UN Security Council Consolidated List.
 Both are authoritative, free, public XML sources — no API key required.
 
-OFAC SDN: US Treasury, updated regularly — gold standard for global sanctions
-UN SC:    UN Security Council consolidated list — international baseline
-EU FSF:   Blocks automated access; flagged as requiring manual verification
+OFAC SDN: US Treasury, ~28 MB, updated regularly
+UN SC:    UN Security Council consolidated list, ~2 MB
+EU FSF:   Blocks automated access; flagged for manual verification in every report
+
+Both XML trees are cached in memory for 24 hours to avoid re-downloading on
+every request (OFAC alone is 28 MB).
 """
 
 import re
+import time
 import xml.etree.ElementTree as ET
 from difflib import SequenceMatcher
 import httpx
@@ -17,6 +21,11 @@ OFAC_SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.xml"
 UN_SC_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
 
 MATCH_THRESHOLD = 0.82
+_CACHE_TTL = 86_400  # 24 hours
+
+# Module-level cache: (ET.Element, fetched_at_epoch)
+_ofac_cache: tuple[ET.Element, float] | None = None
+_un_cache: tuple[ET.Element, float] | None = None
 
 
 def _normalise(name: str) -> str:
@@ -37,18 +46,31 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalise(a), _normalise(b)).ratio()
 
 
-def _fetch_xml(url: str, timeout: int = 30) -> ET.Element | None:
+def _get_xml(url: str, cache_slot: str, timeout: int = 30) -> ET.Element | None:
+    global _ofac_cache, _un_cache
+    now = time.time()
+    cache = _ofac_cache if cache_slot == "ofac" else _un_cache
+
+    if cache is not None and (now - cache[1]) < _CACHE_TTL:
+        return cache[0]
+
     try:
         r = httpx.get(url, timeout=timeout, follow_redirects=True)
         r.raise_for_status()
-        return ET.fromstring(r.content)
+        root = ET.fromstring(r.content)
+        entry = (root, now)
+        if cache_slot == "ofac":
+            _ofac_cache = entry
+        else:
+            _un_cache = entry
+        return root
     except Exception:
-        return None
+        # Return stale cache rather than nothing, if available
+        return cache[0] if cache is not None else None
 
 
 def _check_ofac(company: str) -> list[dict]:
-    """Match against OFAC Specially Designated Nationals list."""
-    root = _fetch_xml(OFAC_SDN_URL)
+    root = _get_xml(OFAC_SDN_URL, "ofac")
     if root is None:
         return []
 
@@ -96,8 +118,7 @@ def _check_ofac(company: str) -> list[dict]:
 
 
 def _check_un_sc(company: str) -> list[dict]:
-    """Match against UN Security Council consolidated sanctions list."""
-    root = _fetch_xml(UN_SC_URL)
+    root = _get_xml(UN_SC_URL, "un")
     if root is None:
         return []
 
@@ -136,7 +157,6 @@ def sanctions_check(state: DDState) -> dict:
     all_hits = ofac_hits + un_hits
 
     datasets_matched = sorted({h["dataset"] for h in all_hits})
-    # Both OFAC and UN SC are priority lists — any match is a priority hit
     priority_hit = bool(all_hits)
 
     return {
@@ -148,7 +168,6 @@ def sanctions_check(state: DDState) -> dict:
             "datasets_matched": datasets_matched,
             "priority_hit": priority_hit,
             "manual_review_required": bool(all_hits),
-            # EU FSF requires browser session — flag for manual check
             "eu_fsf_manual_required": True,
             "sources_checked": ["OFAC SDN", "UN SC Consolidated List"],
             "sources_note": "EU Financial Sanctions File requires manual verification at webgate.ec.europa.eu/fsd",

@@ -3,6 +3,7 @@ import os
 import anthropic
 from agent.state import DDState
 from agent.prompts import SYNTHESIS_PROMPT
+from agent.nodes._utils import parse_json_response
 
 
 def _summarise(data: dict | list, max_chars: int = 1500) -> str:
@@ -32,14 +33,21 @@ def synthesis(state: DDState) -> dict:
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = message.content[0].text.strip()
+    raw = (message.content[0].text or "").strip()
 
-    # Strip markdown fences if present
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    try:
+        risk_scores = parse_json_response(raw)
+    except ValueError as e:
+        return {
+            "risk_scores": {
+                "error": str(e),
+                "overall_risk_score": 5.0,
+                "risk_level": "Medium",
+                "recommendation": "Conditional Approval",
+                "scores": {},
+                "top_risk_factors": ["Synthesis failed — manual review required"],
+                "positive_signals": [],
+            }
+        }
 
-    risk_scores = json.loads(raw)
     return {"risk_scores": risk_scores}

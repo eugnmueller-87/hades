@@ -1,21 +1,11 @@
-import os
 import re
-import httpx
 from agent.state import DDState
-
-SERPER_URL = "https://google.serper.dev/search"
-
-
-def _serper(query: str, num: int = 5) -> list[dict]:
-    headers = {"X-API-KEY": os.environ["SERPER_API_KEY"], "Content-Type": "application/json"}
-    r = httpx.post(SERPER_URL, headers=headers, json={"q": query, "gl": "de", "hl": "de", "num": num}, timeout=10)
-    r.raise_for_status()
-    return r.json().get("organic", [])
+from integrations.serper_client import serper_search as _serper
 
 
 def _extract_hrb(text: str) -> str | None:
     match = re.search(r"HRB\s*\d+", text, re.IGNORECASE)
-    return match.group(0).replace(" ", " ") if match else None
+    return re.sub(r"\s+", "", match.group(0)) if match else None
 
 
 def _extract_amtsgericht(text: str) -> str | None:
