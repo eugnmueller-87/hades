@@ -2,69 +2,50 @@ import os
 import httpx
 from agent.state import DDState
 
-OPENSANCTIONS_URL = "https://api.opensanctions.org/search/default"
+# Matching API — query by entity (more precise than name search, fewer false positives)
+OPENSANCTIONS_MATCH_URL = "https://api.opensanctions.org/match/default"
+OPENSANCTIONS_SEARCH_URL = "https://api.opensanctions.org/search/default"
 
-# Datasets we care about most for EU/DE procurement compliance
 PRIORITY_DATASETS = {
-    "us_ofac_sdn",       # US OFAC Specially Designated Nationals
-    "eu_fsf",            # EU Financial Sanctions (consolidated list)
-    "un_sc_sanctions",   # UN Security Council sanctions
-    "gb_hmt_sanctions",  # UK HM Treasury
-    "eu_eeas_sanctions", # EU External Action Service
-    "de_bafa_sanctions", # German BAFA export control
+    "us_ofac_sdn",        # US OFAC Specially Designated Nationals
+    "eu_fsf",             # EU Financial Sanctions (consolidated list)
+    "un_sc_sanctions",    # UN Security Council sanctions
+    "gb_hmt_sanctions",   # UK HM Treasury
+    "eu_eeas_sanctions",  # EU External Action Service
+    "de_bafa_sanctions",  # German BAFA export control
     "interpol_red_notices",
 }
 
 
-def sanctions_check(state: DDState) -> dict:
-    company = state["company_name"]
+def _build_headers() -> dict:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
     api_key = os.environ.get("OPENSANCTIONS_API_KEY", "")
-
-    headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = f"ApiKey {api_key}"
+    return headers
 
-    try:
-        r = httpx.get(
-            OPENSANCTIONS_URL,
-            headers=headers,
-            params={"q": company, "limit": 10, "fuzzy": "false"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except httpx.HTTPStatusError as e:
-        # Treat API errors as inconclusive — safe default requires manual review
-        return {
-            "sanctions_result": {
-                "company": company,
-                "status": "inconclusive",
-                "error": f"API error {e.response.status_code} — manual review required",
-                "is_sanctioned": None,
-                "matches": [],
-                "datasets_matched": [],
-                "priority_hit": False,
-            }
+
+def _error_result(company: str, error: str) -> dict:
+    """Safe default on any error — never false-clear, always require manual review."""
+    return {
+        "sanctions_result": {
+            "company": company,
+            "status": "inconclusive",
+            "error": error,
+            "is_sanctioned": None,
+            "matches": [],
+            "datasets_matched": [],
+            "priority_hit": False,
+            "manual_review_required": True,
         }
-    except Exception as e:
-        return {
-            "sanctions_result": {
-                "company": company,
-                "status": "inconclusive",
-                "error": str(e),
-                "is_sanctioned": None,
-                "matches": [],
-                "datasets_matched": [],
-                "priority_hit": False,
-            }
-        }
+    }
 
-    results = data.get("results", [])
 
-    # Filter to high-confidence matches only (score >= 0.85)
-    strong_matches = [r for r in results if r.get("score", 0) >= 0.85]
+def _parse_matches(results: list[dict], company: str) -> dict:
+    # Score threshold 0.85 — high confidence matches only
+    strong = [r for r in results if r.get("score", 0) >= 0.85]
 
-    if not strong_matches:
+    if not strong:
         return {
             "sanctions_result": {
                 "company": company,
@@ -73,15 +54,14 @@ def sanctions_check(state: DDState) -> dict:
                 "matches": [],
                 "datasets_matched": [],
                 "priority_hit": False,
-                "total_results": len(results),
+                "manual_review_required": False,
+                "total_candidates": len(results),
             }
         }
 
-    # Extract dataset and entity details from matches
     matched_datasets = set()
     match_summaries = []
-
-    for match in strong_matches:
+    for match in strong:
         datasets = match.get("datasets", [])
         matched_datasets.update(datasets)
         match_summaries.append({
@@ -90,8 +70,8 @@ def sanctions_check(state: DDState) -> dict:
             "schema": match.get("schema", ""),
             "datasets": datasets,
             "countries": match.get("properties", {}).get("country", []),
-            "addresses": match.get("properties", {}).get("address", [])[:2],
             "topics": match.get("properties", {}).get("topics", []),
+            "addresses": match.get("properties", {}).get("address", [])[:2],
         })
 
     priority_hit = bool(matched_datasets & PRIORITY_DATASETS)
@@ -103,7 +83,56 @@ def sanctions_check(state: DDState) -> dict:
             "is_sanctioned": True,
             "matches": match_summaries,
             "datasets_matched": sorted(matched_datasets),
-            "priority_hit": priority_hit,  # True = OFAC/EU/UN/UK hit — highest severity
-            "total_results": len(results),
+            "priority_hit": priority_hit,
+            "manual_review_required": False,
+            "total_candidates": len(results),
         }
     }
+
+
+def sanctions_check(state: DDState) -> dict:
+    company = state["company_name"]
+    country = state.get("country", "")
+    headers = _build_headers()
+
+    # Primary: matching API — query by entity structure (fewer false positives)
+    try:
+        body = {
+            "queries": {
+                "q1": {
+                    "schema": "Company",
+                    "properties": {
+                        "name": [company],
+                        **({"country": [country.lower()]} if country else {}),
+                    },
+                }
+            }
+        }
+        r = httpx.post(OPENSANCTIONS_MATCH_URL, headers=headers, json=body, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("responses", {}).get("q1", {}).get("results", [])
+        return _parse_matches(results, company)
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            # No key or invalid key — fall back to search API
+            pass
+        else:
+            return _error_result(company, f"Match API error {e.response.status_code}")
+    except Exception as e:
+        return _error_result(company, str(e))
+
+    # Fallback: search API (requires key too, but different endpoint)
+    try:
+        r = httpx.get(
+            OPENSANCTIONS_SEARCH_URL,
+            headers=headers,
+            params={"q": company, "limit": 10, "fuzzy": "false"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return _parse_matches(results, company)
+    except Exception as e:
+        return _error_result(company, f"Both match and search APIs failed: {str(e)}")
