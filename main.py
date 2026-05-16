@@ -18,8 +18,8 @@ if missing:
     raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 app = FastAPI(
-    title="Supplier Due Diligence Agent",
-    description="Autonomous supplier research — sanctions, registry, LkSG/CSDDD, ESG, Hermes intelligence.",
+    title="Hades — Supplier Due Diligence Agent",
+    description="Autonomous supplier vetting — sanctions, registry, LkSG/CSDDD, ESG, and Hermes intelligence. Part of the SpendLens procurement stack.",
     version="0.1.0",
 )
 

@@ -1,6 +1,6 @@
 ﻿"""
-4-Scenario Demo for Supplier Due Diligence Agent
--------------------------------------------------
+4-Scenario Demo for Hades (Supplier Due Diligence Agent)
+---------------------------------------------------------
 Scenario 1: Clean DACH supplier, not in Hermes â†’ full research â†’ expected Low/Medium
 Scenario 2: Supplier with known LkSG/ESG exposure â†’ expected High/Conditional
 Scenario 3: Large sanctioned-adjacent entity â†’ expected Critical/Block indicators
@@ -106,8 +106,8 @@ def run_scenario(scenario: dict) -> dict:
 
 def main():
     print("\n" + "="*70)
-    print("  SUPPLIER DUE DILIGENCE AGENT - 4-SCENARIO DEMO")
-    print("  SpendLens x Hermes Intelligence")
+    print("  HADES - SUPPLIER DUE DILIGENCE AGENT - 4-SCENARIO DEMO")
+    print("  SpendLens x Hermes x Hades")
     print("="*70)
 
     # Health check

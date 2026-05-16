@@ -1,8 +1,8 @@
-# Supplier Due Diligence Agent
+# Hades — Supplier Due Diligence Agent
 
-An autonomous AI agent that researches any company and generates a structured procurement due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and Hermes ongoing intelligence — in under 2 minutes.
+Hades is the gatekeeper of the SpendLens procurement stack. It autonomously researches any company and generates a structured due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and Hermes ongoing intelligence — in under 2 minutes.
 
-Built as a standalone module for the **SpendLens** procurement intelligence platform.
+> **SpendLens stack:** Hermes (market intelligence) · **Hades** (supplier vetting) · SpendLens (spend analytics)
 
 ---
 

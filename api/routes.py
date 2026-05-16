@@ -14,7 +14,7 @@ class InvestigateRequest(BaseModel):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "agent": "supplier-dd-agent", "version": "0.1.0"}
+    return {"status": "ok", "agent": "hades", "version": "0.1.0"}
 
 
 @router.post("/investigate")
