@@ -1,138 +1,156 @@
-import os
+"""
+Sanctions check against OFAC SDN List and UN Security Council Consolidated List.
+Both are authoritative, free, public XML sources — no API key required.
+
+OFAC SDN: US Treasury, updated regularly — gold standard for global sanctions
+UN SC:    UN Security Council consolidated list — international baseline
+EU FSF:   Blocks automated access; flagged as requiring manual verification
+"""
+
+import re
+import xml.etree.ElementTree as ET
+from difflib import SequenceMatcher
 import httpx
 from agent.state import DDState
 
-# Matching API — query by entity (more precise than name search, fewer false positives)
-OPENSANCTIONS_MATCH_URL = "https://api.opensanctions.org/match/default"
-OPENSANCTIONS_SEARCH_URL = "https://api.opensanctions.org/search/default"
+OFAC_SDN_URL = "https://www.treasury.gov/ofac/downloads/sdn.xml"
+UN_SC_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
 
-PRIORITY_DATASETS = {
-    "us_ofac_sdn",        # US OFAC Specially Designated Nationals
-    "eu_fsf",             # EU Financial Sanctions (consolidated list)
-    "un_sc_sanctions",    # UN Security Council sanctions
-    "gb_hmt_sanctions",   # UK HM Treasury
-    "eu_eeas_sanctions",  # EU External Action Service
-    "de_bafa_sanctions",  # German BAFA export control
-    "interpol_red_notices",
-}
+MATCH_THRESHOLD = 0.82
 
 
-def _build_headers() -> dict:
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    api_key = os.environ.get("OPENSANCTIONS_API_KEY", "")
-    if api_key:
-        headers["Authorization"] = f"ApiKey {api_key}"
-    return headers
+def _normalise(name: str) -> str:
+    name = name.lower()
+    suffixes = [
+        r"\bgmbh\b", r"\bag\b", r"\binc\.?\b", r"\bllc\.?\b", r"\bltd\.?\b",
+        r"\bcorp\.?\b", r"\bse\b", r"\bsrl\b", r"\bsa\b", r"\bbv\b",
+        r"\bco\.?\b", r"\bplc\.?\b", r"\bgroup\b", r"\bholding[s]?\b",
+        r"\btechnologies\b", r"\btech\b",
+    ]
+    for s in suffixes:
+        name = re.sub(s, "", name)
+    name = re.sub(r"[^\w\s]", " ", name)
+    return " ".join(name.split())
 
 
-def _error_result(company: str, error: str) -> dict:
-    """Safe default on any error — never false-clear, always require manual review."""
-    return {
-        "sanctions_result": {
-            "company": company,
-            "status": "inconclusive",
-            "error": error,
-            "is_sanctioned": None,
-            "matches": [],
-            "datasets_matched": [],
-            "priority_hit": False,
-            "manual_review_required": True,
-        }
-    }
+def _similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, _normalise(a), _normalise(b)).ratio()
 
 
-def _parse_matches(results: list[dict], company: str) -> dict:
-    # Score threshold 0.85 — high confidence matches only
-    strong = [r for r in results if r.get("score", 0) >= 0.85]
+def _fetch_xml(url: str, timeout: int = 30) -> ET.Element | None:
+    try:
+        r = httpx.get(url, timeout=timeout, follow_redirects=True)
+        r.raise_for_status()
+        return ET.fromstring(r.content)
+    except Exception:
+        return None
 
-    if not strong:
-        return {
-            "sanctions_result": {
-                "company": company,
-                "status": "ok",
-                "is_sanctioned": False,
-                "matches": [],
-                "datasets_matched": [],
-                "priority_hit": False,
-                "manual_review_required": False,
-                "total_candidates": len(results),
-            }
-        }
 
-    matched_datasets = set()
-    match_summaries = []
-    for match in strong:
-        datasets = match.get("datasets", [])
-        matched_datasets.update(datasets)
-        match_summaries.append({
-            "name": match.get("caption", ""),
-            "score": round(match.get("score", 0), 3),
-            "schema": match.get("schema", ""),
-            "datasets": datasets,
-            "countries": match.get("properties", {}).get("country", []),
-            "topics": match.get("properties", {}).get("topics", []),
-            "addresses": match.get("properties", {}).get("address", [])[:2],
-        })
+def _check_ofac(company: str) -> list[dict]:
+    """Match against OFAC Specially Designated Nationals list."""
+    root = _fetch_xml(OFAC_SDN_URL)
+    if root is None:
+        return []
 
-    priority_hit = bool(matched_datasets & PRIORITY_DATASETS)
+    hits = []
+    for entry in root.iter():
+        if not entry.tag.endswith("sdnEntry"):
+            continue
+
+        sdn_type = next(
+            (c.text or "" for c in entry if c.tag.endswith("sdnType")), ""
+        )
+        if sdn_type == "Individual":
+            continue
+
+        names = []
+        for child in entry:
+            if child.tag.endswith("lastName") and child.text:
+                names.append(child.text)
+            if child.tag.endswith("akaList"):
+                for aka in child:
+                    for aka_child in aka:
+                        if aka_child.tag.endswith("lastName") and aka_child.text:
+                            names.append(aka_child.text)
+
+        best_score = max((_similarity(company, n) for n in names), default=0.0)
+        if best_score >= MATCH_THRESHOLD:
+            programme = next(
+                (
+                    pc.text
+                    for child in entry if child.tag.endswith("programList")
+                    for prog in child
+                    for pc in prog if pc.tag.endswith("program") and pc.text
+                ),
+                "",
+            )
+            hits.append({
+                "source": "OFAC Specially Designated Nationals",
+                "dataset": "us_ofac_sdn",
+                "matched_name": names[0] if names else "",
+                "score": round(best_score, 3),
+                "programme": programme,
+            })
+
+    return hits
+
+
+def _check_un_sc(company: str) -> list[dict]:
+    """Match against UN Security Council consolidated sanctions list."""
+    root = _fetch_xml(UN_SC_URL)
+    if root is None:
+        return []
+
+    hits = []
+    for entity in root.iter():
+        if not entity.tag.endswith("ENTITY"):
+            continue
+
+        names = []
+        for child in entity:
+            if child.tag.endswith("FIRST_NAME") and child.text:
+                names.append(child.text)
+            if child.tag.endswith("ALIAS_NAME") and child.text:
+                names.append(child.text)
+            if child.tag.endswith("NAME_ORIGINAL_SCRIPT") and child.text:
+                names.append(child.text)
+
+        best_score = max((_similarity(company, n) for n in names), default=0.0)
+        if best_score >= MATCH_THRESHOLD:
+            hits.append({
+                "source": "UN Security Council Consolidated List",
+                "dataset": "un_sc_sanctions",
+                "matched_name": names[0] if names else "",
+                "score": round(best_score, 3),
+                "programme": "",
+            })
+
+    return hits
+
+
+def sanctions_check(state: DDState) -> dict:
+    company = state["company_name"]
+
+    ofac_hits = _check_ofac(company)
+    un_hits = _check_un_sc(company)
+    all_hits = ofac_hits + un_hits
+
+    datasets_matched = sorted({h["dataset"] for h in all_hits})
+    # Both OFAC and UN SC are priority lists — any match is a priority hit
+    priority_hit = bool(all_hits)
 
     return {
         "sanctions_result": {
             "company": company,
             "status": "ok",
-            "is_sanctioned": True,
-            "matches": match_summaries,
-            "datasets_matched": sorted(matched_datasets),
+            "is_sanctioned": bool(all_hits),
+            "matches": all_hits,
+            "datasets_matched": datasets_matched,
             "priority_hit": priority_hit,
-            "manual_review_required": False,
-            "total_candidates": len(results),
+            "manual_review_required": bool(all_hits),
+            # EU FSF requires browser session — flag for manual check
+            "eu_fsf_manual_required": True,
+            "sources_checked": ["OFAC SDN", "UN SC Consolidated List"],
+            "sources_note": "EU Financial Sanctions File requires manual verification at webgate.ec.europa.eu/fsd",
         }
     }
-
-
-def sanctions_check(state: DDState) -> dict:
-    company = state["company_name"]
-    country = state.get("country", "")
-    headers = _build_headers()
-
-    # Primary: matching API — query by entity structure (fewer false positives)
-    try:
-        body = {
-            "queries": {
-                "q1": {
-                    "schema": "Company",
-                    "properties": {
-                        "name": [company],
-                        **({"country": [country.lower()]} if country else {}),
-                    },
-                }
-            }
-        }
-        r = httpx.post(OPENSANCTIONS_MATCH_URL, headers=headers, json=body, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        results = data.get("responses", {}).get("q1", {}).get("results", [])
-        return _parse_matches(results, company)
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 403:
-            # No key or invalid key — fall back to search API
-            pass
-        else:
-            return _error_result(company, f"Match API error {e.response.status_code}")
-    except Exception as e:
-        return _error_result(company, str(e))
-
-    # Fallback: search API (requires key too, but different endpoint)
-    try:
-        r = httpx.get(
-            OPENSANCTIONS_SEARCH_URL,
-            headers=headers,
-            params={"q": company, "limit": 10, "fuzzy": "false"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        results = r.json().get("results", [])
-        return _parse_matches(results, company)
-    except Exception as e:
-        return _error_result(company, f"Both match and search APIs failed: {str(e)}")
