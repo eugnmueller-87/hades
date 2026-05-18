@@ -1,4 +1,7 @@
+import csv
+import io
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from agent.graph import dd_graph
 from integrations.hermes_client import HermesClient
@@ -88,3 +91,94 @@ def get_audit_latest(company: str):
     if not history:
         raise HTTPException(status_code=404, detail=f"No audit records found for '{company}'")
     return history[0]
+
+
+_CSV_FIELDS = [
+    "company", "investigated_at", "mode", "category", "country",
+    "overall_risk_score", "risk_level", "recommendation",
+    "sanctions_hit", "sanctions_manual_review",
+    "lksg_signal", "lksg_flagged_count", "esg_rating",
+    "company_status", "hrb",
+    "dim_sanctions", "dim_registry", "dim_news_sentiment",
+    "dim_lksg_csddd", "dim_esg_labour", "dim_hermes_intelligence",
+    "hermes_tracked", "hermes_registered",
+    "required_next_steps",
+]
+
+
+def _records_to_csv(records: list[dict]) -> str:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDS, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for r in records:
+        dims = r.get("dimension_scores", {})
+        steps = r.get("required_next_steps", [])
+        row = {
+            "company": r.get("company", ""),
+            "investigated_at": r.get("investigated_at", ""),
+            "mode": r.get("mode", ""),
+            "category": r.get("category", ""),
+            "country": r.get("country", ""),
+            "overall_risk_score": r.get("overall_risk_score", ""),
+            "risk_level": r.get("risk_level", ""),
+            "recommendation": r.get("recommendation", ""),
+            "sanctions_hit": r.get("sanctions_hit", ""),
+            "sanctions_manual_review": r.get("sanctions_manual_review", ""),
+            "lksg_signal": r.get("lksg_signal", ""),
+            "lksg_flagged_count": r.get("lksg_flagged_count", ""),
+            "esg_rating": r.get("esg_rating", ""),
+            "company_status": r.get("company_status", ""),
+            "hrb": r.get("hrb", ""),
+            "dim_sanctions": dims.get("sanctions", ""),
+            "dim_registry": dims.get("registry", ""),
+            "dim_news_sentiment": dims.get("news_sentiment", ""),
+            "dim_lksg_csddd": dims.get("lksg_csddd", ""),
+            "dim_esg_labour": dims.get("esg_labour", ""),
+            "dim_hermes_intelligence": dims.get("hermes_intelligence", ""),
+            "hermes_tracked": r.get("hermes_tracked", ""),
+            "hermes_registered": r.get("hermes_registered", ""),
+            "required_next_steps": " | ".join(steps) if steps else "",
+        }
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+@router.get("/audit/export/csv")
+def export_all_csv():
+    """Export full audit history for ALL suppliers as a CSV file."""
+    hermes = _get_hermes()
+    try:
+        slugs = hermes.get_all_audit_slugs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    all_records = []
+    for slug in slugs:
+        try:
+            all_records.extend(hermes.get_audit(slug))
+        except Exception:
+            pass
+    all_records.sort(key=lambda r: r.get("investigated_at", ""), reverse=True)
+    csv_content = _records_to_csv(all_records)
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=hades_supplier_audit.csv"},
+    )
+
+
+@router.get("/audit/{company}/export/csv")
+def export_company_csv(company: str):
+    """Export audit history for a single supplier as a CSV file."""
+    try:
+        history = _get_hermes().get_audit(company)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not history:
+        raise HTTPException(status_code=404, detail=f"No audit records found for '{company}'")
+    csv_content = _records_to_csv(history)
+    safe_name = company.replace(" ", "_").replace("/", "_")
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=hades_audit_{safe_name}.csv"},
+    )

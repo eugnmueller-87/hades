@@ -128,6 +128,11 @@ class HermesClient:
         self.r.lpush(key, json.dumps(audit_entry))
         self.r.ltrim(key, 0, 49)
 
+    def get_all_audit_slugs(self) -> list[str]:
+        """Return all slugs that have audit records in Redis."""
+        keys = self.r.keys("hades:audit:*")
+        return [k.replace("hades:audit:", "") for k in keys]
+
     def get_audit(self, company_name: str) -> list[dict]:
         """
         Return full audit history for a supplier, newest first.
