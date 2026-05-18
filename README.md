@@ -4,7 +4,7 @@
 
 > **SpendLens procurement stack:** Icarus (personal AI OS) · SpendLens (spend analytics) · **Hades** (supplier vetting) · Hermes (market intelligence)
 
-**Status:** Live on Railway (URL available on request)
+**Live:** `https://hades-production-b86a.up.railway.app` · **[Project board](https://github.com/users/eugnmueller-87/projects/8/views/1)**
 
 ---
 
