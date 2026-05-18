@@ -2,7 +2,7 @@
 
 **Hades** is the gatekeeper of the SpendLens procurement stack. It autonomously researches any supplier and generates a structured due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and live Hermes market intelligence — in under 2 minutes. No manual research. No spreadsheets.
 
-> **SpendLens procurement stack:** Hermes (market intelligence) · **Hades** (supplier vetting) · SpendLens (spend analytics)
+> **SpendLens procurement stack:** Icarus (personal AI OS) · SpendLens (spend analytics) · **Hades** (supplier vetting) · Hermes (market intelligence)
 
 **Live:** `https://hades-production-b86a.up.railway.app`
 
@@ -11,6 +11,77 @@
 ## Screenshot
 
 ![Hades — Bosch investigation, High risk, score 5.0, investigation pipeline complete](screenshots/Screenshot%202026-05-16%20205825.png)
+
+---
+
+## Full Stack Architecture
+
+This is the complete picture — four AI systems interacting to handle the entire procurement intelligence lifecycle.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              ICARUS (Personal AI OS)                        │
+│                     Telegram bot · Claude Sonnet 4.6 · icarusai.de         │
+│                                                                             │
+│  User: "Is Bechtle a supplier?"          User: "Export supplier CSV"        │
+│         │                                         │                         │
+│         ▼                                         ▼                         │
+│  hades_supplier_lookup ──────────────── hades_export                        │
+│    (runs in parallel)                    (calls Hades API,                  │
+│         │          │                     sends CSV as                       │
+│         │          │                     Telegram document)                 │
+│         ▼          ▼                                                        │
+└─── SpendLens ── Hades ───────────────────────────────────────────────────┘
+         │             │
+         │    checks active spend             checks audit Redis
+         │    in vendor DB                    for prior DD records
+         │             │
+         │     ┌───────┴──────────────────────────────────────────────┐
+         │     │                 HADES  (this agent)                  │
+         │     │                                                      │
+         │     │  hermes_preflight ── reads Hermes Redis pre-flight   │
+         │     │       │                                              │
+         │     │  ┌────┴─────────────────────────────────────────┐   │
+         │     │  │              parallel fan-out                │   │
+         │     │  │  web_research    news_sentiment              │   │
+         │     │  │  sanctions_check registry_lookup             │   │
+         │     │  │  lksg_signals    esg_signals                 │   │
+         │     │  └──────────────────┬───────────────────────────┘   │
+         │     │                     │                               │
+         │     │               synthesis  ← Claude Sonnet 4.6        │
+         │     │                     │                               │
+         │     │           report_generator ← Claude Sonnet 4.6      │
+         │     │                     │                               │
+         │     │           hermes_register ── writes to watchlist    │
+         │     │                     │                               │
+         │     │            audit_writer ── persists to Redis        │
+         │     └───────────────────────────────────────────────────┘
+         │                           │
+         │                           ▼
+         │          ┌────────────────────────────────┐
+         │          │     HERMES (market intel)      │
+         │          │  Upstash Redis · Upstash Vector │
+         │          │  ~590 suppliers · 17 categories │
+         │          │  RSS · EDGAR · Tavily · Jobs    │
+         │          │  Claude Haiku (signal class.)   │
+         │          └────────────────────────────────┘
+         │                           │
+         └── vendor DB updated ──────┘
+             (hades_risk_score,
+              hades_recommendation, ...)
+```
+
+### How the four systems communicate
+
+| From | To | What | When |
+|---|---|---|---|
+| SpendLens UI | Hades | `POST /investigate` | New vendor created or periodic recheck |
+| Icarus | SpendLens | `GET /api/suppliers/lookup/{name}` | User asks "is X a supplier?" |
+| Icarus | Hades | `GET /audit/{company}/latest` | User asks "is X onboarded?" or "pull DD report" |
+| Icarus | Hades | `GET /audit/export/csv` | User says "export supplier report" |
+| Hades | Hermes Redis | `lpush hades:audit:<slug>` | After every investigation (audit trail) |
+| Hades | Hermes Redis | `set hermes:watchlist:<slug>` | Registers supplier for ongoing monitoring |
+| Hermes | Hermes Redis | `get hermes:supplier:<slug>` | Hades pre-flight reads live market intel |
 
 ---
 
@@ -27,6 +98,7 @@ Send `POST /investigate` with a company name, category, and country. Hades runs 
 - **ESG & labour risk** — EcoVadis, ILO, Transparency Intl, Violation Tracker
 - **Required next steps** surfaced to the procurement manager
 - **Hermes integration** — reads prior intelligence pre-flight, registers new suppliers post-report for ongoing monitoring
+- **Persistent audit trail** — every investigation saved to Redis, queryable via API
 
 ### Risk Score Weights
 
@@ -48,73 +120,7 @@ Send `POST /investigate` with a company name, category, and country. Hades runs 
 
 ---
 
-## Agent Interaction — How Hades Fits the SpendLens Stack
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        SpendLens Platform                           │
-│           (spend analytics, vendor records, approval flows)         │
-└────────────────────────┬───────────────────────────────────────────┘
-                         │  POST /investigate
-                         │  (new vendor onboarding or periodic recheck)
-                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     HADES  (this agent)                             │
-│                                                                     │
-│   hermes_preflight                                                  │
-│        │── reads Hermes Redis (supplier intel pre-flight)           │
-│        │── if signal_count > 10: skips NewsAPI, uses Hermes data    │
-│        │                                                            │
-│        ├── web_research     (Serper: 4 negative-signal queries)     │
-│        ├── news_sentiment   (newsapi.ai: last 90 days, EN+DE)       │
-│        ├── sanctions_check  (OFAC SDN + UN SC XML, 24h cache)       │
-│        ├── registry_lookup  (NorthData + Unternehmensregister)      │
-│        ├── lksg_signals     (BAFA, NCP, ECCHR/NGO)                  │
-│        └── esg_signals      (EcoVadis, ILO, TI, Violation Tracker)  │
-│                                                                     │
-│   synthesis          ← Claude Sonnet 4.6: scores 6 dimensions      │
-│   report_generator   ← Claude Sonnet 4.6: full structured JSON      │
-│   hermes_register    ← writes supplier to Hermes watchlist          │
-│                                                                     │
-└────────────────────────┬───────────────────────────────────────────┘
-                         │  returns full DD report (60–120s)
-                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  SpendLens stores on vendor record:                                 │
-│    hades_risk_score · hades_risk_level · hades_recommendation       │
-│    hades_lksg_signal · hades_sanctions_clear · hades_next_steps     │
-└─────────────────────────────────────────────────────────────────────┘
-                         │
-                         │  hermes_register (idempotent)
-                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     HERMES  (market intelligence agent)             │
-│   Upstash Redis  ←  Hades writes hermes:watchlist:<slug>            │
-│   Hermes crawlers start covering new supplier on next cycle         │
-│   On recheck: Hades reads hermes:supplier:<slug> pre-flight         │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### When SpendLens calls Hades
-
-| Trigger | Mode | Effect |
-|---|---|---|
-| New vendor created, pending approval | `"mode": "full"` | Full 6-node research; supplier added to Hermes watchlist |
-| Existing vendor periodic recheck | `"mode": "recheck"` | Same pipeline; Hermes data pre-loaded if tracked |
-
-### What Hades writes back
-
-SpendLens gates the onboarding decision on `report.recommendation`:
-
-| Value | Meaning |
-|---|---|
-| `Approve` | Low risk — auto-approve or standard review |
-| `Conditional Approval` | Medium/elevated risk — procurement manager review required |
-| `Block` | Critical risk or sanctions hit — vendor blocked |
-
----
-
-## Architecture
+## Internal Pipeline
 
 ```
 POST /investigate
@@ -133,7 +139,9 @@ POST /investigate
                            │
                    hermes_register           ← writes supplier to Hermes watchlist
                            │
-                         END
+                    audit_writer             ← persists full audit record to Redis
+                           │
+                          END
 ```
 
 **Stack:** FastAPI · LangGraph StateGraph · Claude Sonnet 4.6 · Upstash Redis · Serper · newsapi.ai · OFAC SDN XML · UN SC XML
@@ -166,51 +174,117 @@ POST /investigate
 {
   "company": "Robert Bosch GmbH",
   "hermes_registered": true,
-  "risk_scores": {
-    "overall_risk_score": 4.7,
-    "risk_level": "Medium",
-    "recommendation": "Conditional Approval",
-    "scores": {
-      "sanctions":           { "score": 4, "rationale": "No direct OFAC or UN SC match found." },
-      "registry":            { "score": 2, "rationale": "Active GmbH, HRB 14000 Stuttgart." },
-      "news_sentiment":      { "score": 2, "rationale": "Neutral coverage, no high-severity events." },
-      "lksg_csddd":          { "score": 7, "rationale": "12 flagged BAFA/NGO findings." },
-      "esg_labour":          { "score": 6, "rationale": "4 negative signals, labour rights concerns." },
-      "hermes_intelligence": { "score": 3, "rationale": "Not previously tracked by Hermes." }
-    },
-    "top_risk_factors": ["LkSG exposure in Tier-2 supply chain", "..."],
-    "positive_signals":  ["Listed company, public reporting", "..."]
-  },
   "report": {
     "overall_risk_score": 4.7,
     "risk_level": "Medium",
     "recommendation": "Conditional Approval",
     "executive_summary": "...",
-    "company_overview": {
-      "legal_name": "Robert Bosch GmbH",
-      "hrb": "HRB 14000",
-      "amtsgericht": "Amtsgericht Stuttgart",
-      "company_status": "active"
+    "dimension_scores": {
+      "sanctions": 4,
+      "registry": 2,
+      "news_sentiment": 2,
+      "lksg_csddd": 7,
+      "esg_labour": 6,
+      "hermes_intelligence": 3
     },
-    "sanctions_status": {
-      "is_sanctioned": false,
-      "eu_fsf_manual_required": true,
-      "manual_review_required": false
-    },
-    "lksg_csddd_assessment": {
-      "compliance_signal": "red_flag",
-      "flagged_count": 12
-    },
+    "lksg_csddd_assessment": { "compliance_signal": "red_flag", "flagged_count": 12 },
     "required_next_steps": ["Request LkSG self-declaration", "..."]
   }
 }
 ```
+
+### `GET /audit/{company}`
+
+Returns the full investigation history for a supplier, newest first (up to 50 records).
+
+```json
+{
+  "company": "Bechtle AG",
+  "investigation_count": 3,
+  "history": [
+    {
+      "investigated_at": "2026-05-18T14:22:00",
+      "mode": "full",
+      "overall_risk_score": 3.2,
+      "risk_level": "Low",
+      "recommendation": "Approve",
+      "dimension_scores": { "sanctions": 2, "registry": 1, ... },
+      "lksg_signal": "no_findings",
+      "hermes_tracked": true,
+      "required_next_steps": []
+    }
+  ]
+}
+```
+
+### `GET /audit/{company}/latest`
+
+Returns only the most recent audit record. Returns `404` if no records exist.
+
+### `GET /audit/export/csv`
+
+Downloads the full audit history for **all** investigated suppliers as a CSV file.
+
+**Columns:** `company · investigated_at · mode · category · country · overall_risk_score · risk_level · recommendation · sanctions_hit · sanctions_manual_review · lksg_signal · lksg_flagged_count · esg_rating · company_status · hrb · dim_sanctions · dim_registry · dim_news_sentiment · dim_lksg_csddd · dim_esg_labour · dim_hermes_intelligence · hermes_tracked · hermes_registered · required_next_steps`
+
+### `GET /audit/{company}/export/csv`
+
+Downloads the audit trail for a **single supplier** as a CSV file.
 
 ### `GET /health`
 
 ```json
 { "status": "ok", "agent": "hades", "version": "0.1.0" }
 ```
+
+---
+
+## Audit Trail
+
+Every investigation is persisted to Upstash Redis as a structured record:
+
+```
+Redis key: hades:audit:<slug>
+Type:      List (newest first, capped at 50 per supplier)
+```
+
+This means:
+- Audit data **survives Railway redeployments** (Redis, not filesystem)
+- Risk score changes are trackable over time
+- Icarus can query history directly: "has Bechtle's risk score changed?"
+- CSV export available for portfolio-level review
+
+---
+
+## Icarus Integration (Telegram)
+
+Icarus exposes three Hades-related tools to the user via Telegram:
+
+| Tool | Example prompts | What it does |
+|---|---|---|
+| `hades_supplier_lookup` | "Is Bechtle a supplier?" · "Have we checked Siemens?" | Calls SpendLens spend data AND Hades audit in parallel — one combined answer |
+| `hades_report` | "Pull the DD report for Bosch" · "What's the risk score for SAP?" | Returns full latest audit record with dimension breakdown |
+| `hades_audit` | "Show me the audit trail for Bechtle" · "How many times have we checked Bosch?" | Returns all investigations newest first |
+| `hades_export` | "Export supplier report" · "Send me a CSV for Bechtle" | Downloads CSV from Hades API, sends as Telegram document |
+
+---
+
+## When SpendLens calls Hades
+
+| Trigger | Mode | Effect |
+|---|---|---|
+| New vendor created, pending approval | `"mode": "full"` | Full 6-node research; supplier added to Hermes watchlist |
+| Existing vendor periodic recheck | `"mode": "recheck"` | Same pipeline; Hermes data pre-loaded if tracked |
+
+### What Hades writes back
+
+SpendLens gates the onboarding decision on `report.recommendation`:
+
+| Value | Meaning |
+|---|---|
+| `Approve` | Low risk — auto-approve or standard review |
+| `Conditional Approval` | Medium/elevated risk — procurement manager review required |
+| `Block` | Critical risk or sanctions hit — vendor blocked |
 
 ---
 
@@ -295,7 +369,7 @@ Hades checks three authoritative sources for LkSG/CSDDD signals:
 hades/
 ├── main.py                          # FastAPI entry point — loads .env, validates env vars
 ├── api/
-│   └── routes.py                    # POST /investigate, GET /health
+│   └── routes.py                    # All API endpoints including audit + CSV export
 ├── agent/
 │   ├── state.py                     # DDState TypedDict — full pipeline state schema
 │   ├── graph.py                     # LangGraph StateGraph — fan-out/fan-in wiring
@@ -311,9 +385,10 @@ hades/
 │       ├── esg_signals.py           # EcoVadis, ILO, TI, Violation Tracker
 │       ├── synthesis.py             # Claude Sonnet 4.6: score 6 risk dimensions
 │       ├── report_generator.py      # Claude Sonnet 4.6: full structured DD report
-│       └── hermes_register.py       # Post-report: write supplier to Hermes watchlist
+│       ├── hermes_register.py       # Post-report: write supplier to Hermes watchlist
+│       └── audit_writer.py          # Post-report: persist audit record to Redis
 ├── integrations/
-│   ├── hermes_client.py             # Upstash Redis client (shared with Hermes)
+│   ├── hermes_client.py             # Upstash Redis client — audit read/write + watchlist
 │   └── serper_client.py             # Shared Serper search function
 ├── demo/
 │   └── run_demo.py                  # 4-scenario live demo script
@@ -322,14 +397,13 @@ hades/
 
 ---
 
-## Part of SpendLens
-
-**Hades** is one of three agents in the SpendLens procurement intelligence stack:
+## Part of the SpendLens Stack
 
 | Agent | Role | Trigger |
 |---|---|---|
+| **Icarus** | Personal AI OS — orchestrates everything from Telegram | User message |
 | **SpendLens** | Spend analytics, vendor records, approval workflows | User-facing platform |
-| **Hermes** | Ongoing market intelligence — crawls signals, monitors watchlist vendors | Scheduled / event-driven |
-| **Hades** | Autonomous supplier due diligence — gates vendor onboarding decisions | Called by SpendLens at onboarding + periodic recheck |
+| **Hades** | Autonomous supplier due diligence — gates vendor onboarding | SpendLens onboarding + Icarus query |
+| **Hermes** | Ongoing market intelligence — crawls signals, monitors watchlist | Scheduled / Hades registration |
 
-Hades and Hermes share the same Upstash Redis instance. Every vendor Hades investigates is automatically added to the Hermes watchlist, so Hermes crawlers begin monitoring them from the next cycle. On subsequent Hades rechecks, Hermes data is pre-loaded into the risk score.
+Hades and Hermes share the same Upstash Redis instance. Every vendor Hades investigates is automatically added to the Hermes watchlist — so Hermes crawlers begin monitoring them from the next cycle. On subsequent rechecks, Hermes data is pre-loaded into the Hades risk score.
