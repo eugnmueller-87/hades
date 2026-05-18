@@ -1,8 +1,18 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from agent.graph import dd_graph
+from integrations.hermes_client import HermesClient
 
 router = APIRouter()
+
+_hermes: HermesClient | None = None
+
+
+def _get_hermes() -> HermesClient:
+    global _hermes
+    if _hermes is None:
+        _hermes = HermesClient()
+    return _hermes
 
 
 class InvestigateRequest(BaseModel):
@@ -49,3 +59,32 @@ def investigate(req: InvestigateRequest):
         "risk_scores": final_state.get("risk_scores", {}),
         "hermes_registered": final_state.get("hermes_registered", False),
     }
+
+
+@router.get("/audit/{company}")
+def get_audit(company: str):
+    """
+    Return the full investigation audit trail for a supplier, newest first.
+    Up to 50 records are kept per supplier.
+    """
+    try:
+        history = _get_hermes().get_audit(company)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "company": company,
+        "investigation_count": len(history),
+        "history": history,
+    }
+
+
+@router.get("/audit/{company}/latest")
+def get_audit_latest(company: str):
+    """Return only the most recent audit record for a supplier."""
+    try:
+        history = _get_hermes().get_audit(company)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not history:
+        raise HTTPException(status_code=404, detail=f"No audit records found for '{company}'")
+    return history[0]

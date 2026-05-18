@@ -118,6 +118,34 @@ class HermesClient:
             ],
         }
 
+    def write_audit(self, company_name: str, audit_entry: dict) -> None:
+        """
+        Append one audit entry to hades:audit:<slug> (Redis list, newest first).
+        Keeps the last 50 entries per supplier — older ones are trimmed automatically.
+        """
+        slug = self._slug(company_name)
+        key = f"hades:audit:{slug}"
+        self.r.lpush(key, json.dumps(audit_entry))
+        self.r.ltrim(key, 0, 49)
+
+    def get_audit(self, company_name: str) -> list[dict]:
+        """
+        Return full audit history for a supplier, newest first.
+        Returns [] if no audit records exist.
+        """
+        slug = self._slug(company_name)
+        key = f"hades:audit:{slug}"
+        raw_entries = self.r.lrange(key, 0, -1)
+        if not raw_entries:
+            return []
+        result = []
+        for entry in raw_entries:
+            try:
+                result.append(json.loads(entry))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return result
+
     def register_vendor(self, vendor_name: str, category: str, spend_eur: float = 0,
                         country: str = "", source: str = "dd_agent") -> bool:
         """

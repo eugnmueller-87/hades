@@ -10,6 +10,7 @@ from agent.nodes.esg_signals import esg_signals
 from agent.nodes.synthesis import synthesis
 from agent.nodes.report_generator import report_generator
 from agent.nodes.hermes_register import hermes_register
+from agent.nodes.audit_writer import audit_writer
 
 
 def build_graph():
@@ -30,8 +31,9 @@ def build_graph():
     g.add_node("synthesis", synthesis)
     g.add_node("report_generator", report_generator)
 
-    # Post-report: register in Hermes
+    # Post-report: register in Hermes, then write audit record
     g.add_node("hermes_register", hermes_register)
+    g.add_node("audit_writer", audit_writer)
 
     # Entry point
     g.set_entry_point("hermes_preflight")
@@ -52,10 +54,11 @@ def build_graph():
     g.add_edge("lksg_signals", "synthesis")
     g.add_edge("esg_signals", "synthesis")
 
-    # Synthesis → report → register → done
+    # Synthesis → report → register → audit → done
     g.add_edge("synthesis", "report_generator")
     g.add_edge("report_generator", "hermes_register")
-    g.add_edge("hermes_register", END)
+    g.add_edge("hermes_register", "audit_writer")
+    g.add_edge("audit_writer", END)
 
     return g.compile()
 
