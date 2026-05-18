@@ -122,11 +122,13 @@ class HermesClient:
         """
         Append one audit entry to hades:audit:<slug> (Redis list, newest first).
         Keeps the last 50 entries per supplier — older ones are trimmed automatically.
+        TTL is refreshed to 2 years on every write so inactive suppliers eventually expire.
         """
         slug = self._slug(company_name)
         key = f"hades:audit:{slug}"
         self.r.lpush(key, json.dumps(audit_entry))
         self.r.ltrim(key, 0, 49)
+        self.r.expire(key, 60 * 60 * 24 * 730)  # 2 years, reset on each new investigation
 
     def get_all_audit_slugs(self) -> list[str]:
         """Return all slugs that have audit records in Redis."""
