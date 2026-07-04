@@ -27,16 +27,10 @@ You have received research outputs from 6 parallel data sources for the company:
 
 ## Your Task
 
-Score each risk dimension independently on a scale of 1–10 (1 = no risk, 10 = critical risk).
-Then compute a weighted overall score.
-
-Weights:
-- Sanctions Risk: 25%
-- Registry Risk: 15%
-- News Sentiment Risk: 15%
-- LkSG / CSDDD Risk: 20%
-- ESG & Labour Risk: 15%
-- Hermes Intelligence Risk: 10%
+Score each risk dimension independently on a scale of 1–10 (1 = no risk, 10 = critical risk),
+with a short rationale for each. **You do NOT compute the overall score, the risk level, or the
+recommendation** — those are derived by deterministic downstream code from your dimension scores
+and the hard research signals. Your job is the per-dimension judgment only.
 
 Return a JSON object with this exact structure:
 {{
@@ -48,17 +42,12 @@ Return a JSON object with this exact structure:
     "esg_labour": {{"score": <1-10>, "rationale": "<2 sentences>"}},
     "hermes_intelligence": {{"score": <1-10>, "rationale": "<2 sentences>"}}
   }},
-  "overall_risk_score": <weighted average, 1 decimal>,
-  "risk_level": "<Low|Medium|High|Critical>",
   "top_risk_factors": ["<factor 1>", "<factor 2>", "<factor 3>"],
-  "positive_signals": ["<signal 1>", "<signal 2>"],
-  "recommendation": "<Approve|Conditional Approval|Block>"
+  "positive_signals": ["<signal 1>", "<signal 2>"]
 }}
 
-Risk level thresholds: Low = 1.0–3.9, Medium = 4.0–6.4, High = 6.5–7.9, Critical = 8.0–10.0
-
-Rules:
-- If is_sanctioned = true and priority_hit = true → sanctions score must be >= 9, recommendation must be Block
+Scoring guidance (these shape YOUR dimension scores; the final verdict is computed in code):
+- If sanctions research shows is_sanctioned = true with priority_hit = true → sanctions score must be >= 9
 - If compliance_signal = red_flag → lksg_csddd score must be >= 7
 - If company_status = dissolved/insolvent → registry score must be >= 7
 - Never return free text outside the JSON object

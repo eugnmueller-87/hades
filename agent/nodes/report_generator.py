@@ -38,6 +38,17 @@ def report_generator(state: DDState) -> dict:
 
     raw = (message.content[0].text or "").strip()
 
+    # The deterministic verdict computed in synthesis is the source of truth. The report
+    # LLM writes the prose (executive summary, findings, next steps) but must NEVER own the
+    # number — so we overwrite the three decision fields with the code-decided values after
+    # parsing. A hallucinated score in the report text can't reach the user.
+    decided = state.get("risk_scores", {}) or {}
+    grounding = {
+        k: decided[k]
+        for k in ("overall_risk_score", "risk_level", "recommendation")
+        if k in decided
+    }
+
     try:
         report = parse_json_response(raw)
     except ValueError as e:
@@ -46,12 +57,14 @@ def report_generator(state: DDState) -> dict:
                 "error": str(e),
                 "report_date": report_date,
                 "company": state["company_name"],
-                "overall_risk_score": None,
-                "risk_level": "Unknown",
-                "recommendation": "Manual Review Required",
-                "executive_summary": "Report generation failed — manual review required.",
+                "overall_risk_score": decided.get("overall_risk_score"),
+                "risk_level": decided.get("risk_level", "Unknown"),
+                "recommendation": decided.get("recommendation", "Manual Review Required"),
+                "executive_summary": "Report generation failed — verdict is the deterministic score; review the raw research manually.",
                 "required_next_steps": ["Review raw research data manually"],
             }
         }
 
+    # Ground the money-relevant fields on code, not the model's echo of them.
+    report.update(grounding)
     return {"report": report}
