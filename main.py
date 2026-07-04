@@ -1,6 +1,13 @@
+import logging
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+# Minimal structured logging so errors are observable in Railway logs
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 from fastapi import FastAPI
 from api.routes import router
@@ -24,3 +31,15 @@ app = FastAPI(
 )
 
 app.include_router(router)
+
+
+# No CORS middleware on purpose: the API is consumed server-to-server (Icarus/
+# SpendLens), and without CORS headers browsers cannot read cross-origin
+# responses — the safest default for an unauthenticated API.
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
