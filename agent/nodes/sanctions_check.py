@@ -69,10 +69,11 @@ def _get_xml(url: str, cache_slot: str, timeout: int = 30) -> ET.Element | None:
         return cache[0] if cache is not None else None
 
 
-def _check_ofac(company: str) -> list[dict]:
+def _check_ofac(company: str) -> list[dict] | None:
+    """Returns hit list, or None if the OFAC list could not be fetched."""
     root = _get_xml(OFAC_SDN_URL, "ofac")
     if root is None:
-        return []
+        return None
 
     hits = []
     for entry in root.iter():
@@ -117,10 +118,11 @@ def _check_ofac(company: str) -> list[dict]:
     return hits
 
 
-def _check_un_sc(company: str) -> list[dict]:
+def _check_un_sc(company: str) -> list[dict] | None:
+    """Returns hit list, or None if the UN list could not be fetched."""
     root = _get_xml(UN_SC_URL, "un")
     if root is None:
-        return []
+        return None
 
     hits = []
     for entity in root.iter():
@@ -154,22 +156,37 @@ def sanctions_check(state: DDState) -> dict:
 
     ofac_hits = _check_ofac(company)
     un_hits = _check_un_sc(company)
-    all_hits = ofac_hits + un_hits
 
+    # Fail closed: a list that could not be fetched must not read as "no hits"
+    sources_checked = []
+    sources_unavailable = []
+    if ofac_hits is None:
+        ofac_hits = []
+        sources_unavailable.append("OFAC SDN")
+    else:
+        sources_checked.append("OFAC SDN")
+    if un_hits is None:
+        un_hits = []
+        sources_unavailable.append("UN SC Consolidated List")
+    else:
+        sources_checked.append("UN SC Consolidated List")
+
+    all_hits = ofac_hits + un_hits
     datasets_matched = sorted({h["dataset"] for h in all_hits})
     priority_hit = bool(all_hits)
 
     return {
         "sanctions_result": {
             "company": company,
-            "status": "ok",
+            "status": "ok" if not sources_unavailable else "degraded",
             "is_sanctioned": bool(all_hits),
             "matches": all_hits,
             "datasets_matched": datasets_matched,
             "priority_hit": priority_hit,
-            "manual_review_required": bool(all_hits),
+            "manual_review_required": bool(all_hits) or bool(sources_unavailable),
             "eu_fsf_manual_required": True,
-            "sources_checked": ["OFAC SDN", "UN SC Consolidated List"],
+            "sources_checked": sources_checked,
+            "sources_unavailable": sources_unavailable,
             "sources_note": "EU Financial Sanctions File requires manual verification at webgate.ec.europa.eu/fsd",
         }
     }

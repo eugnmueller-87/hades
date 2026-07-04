@@ -1,28 +1,78 @@
 import csv
 import io
-from fastapi import APIRouter, HTTPException
+import logging
+import os
+import re
+import threading
+import time
+from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from agent.graph import dd_graph
 from integrations.hermes_client import HermesClient
 
 router = APIRouter()
 
+logger = logging.getLogger("hades.api")
+
 _hermes: HermesClient | None = None
+_hermes_lock = threading.Lock()
 
 
 def _get_hermes() -> HermesClient:
     global _hermes
     if _hermes is None:
-        _hermes = HermesClient()
+        with _hermes_lock:
+            if _hermes is None:
+                _hermes = HermesClient()
     return _hermes
 
 
+# --- Lightweight in-memory rate limit for /investigate (it calls paid APIs) ---
+# Per-process fixed window keyed by client IP. Best-effort: resets on restart,
+# X-Forwarded-For is spoofable — real abuse protection needs an edge/auth layer.
+_RATE_LIMIT = int(os.environ.get("INVESTIGATE_RATE_LIMIT", "10"))       # requests per window
+_RATE_WINDOW = int(os.environ.get("INVESTIGATE_RATE_WINDOW", "3600"))   # seconds
+_rate_lock = threading.Lock()
+_rate_hits: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(request: Request) -> None:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
+    now = time.time()
+    with _rate_lock:
+        if len(_rate_hits) > 10_000:  # bound memory under IP churn
+            _rate_hits.clear()
+        hits = [t for t in _rate_hits.get(ip, []) if now - t < _RATE_WINDOW]
+        if len(hits) >= _RATE_LIMIT:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded — try again later")
+        hits.append(now)
+        _rate_hits[ip] = hits
+
+
 class InvestigateRequest(BaseModel):
-    company: str
-    category: str
-    country: str = "DE"
-    mode: str = "full"  # "full" | "recheck"
+    company: str = Field(min_length=1, max_length=200)
+    category: str = Field(max_length=100)
+    country: str = Field(default="DE", pattern=r"^[A-Za-z]{2}$")  # ISO 3166-1 alpha-2
+    mode: str = Field(default="full", pattern=r"^(full|recheck)$")
+
+    @field_validator("company", "category")
+    @classmethod
+    def _clean_text(cls, v: str) -> str:
+        v = v.strip()
+        if any(ord(c) < 32 or ord(c) == 127 for c in v):
+            raise ValueError("control characters are not allowed")
+        return v
+
+    @field_validator("company")
+    @classmethod
+    def _non_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("company must not be blank")
+        return v
 
 
 @router.get("/health")
@@ -31,7 +81,8 @@ def health():
 
 
 @router.post("/investigate")
-def investigate(req: InvestigateRequest):
+def investigate(req: InvestigateRequest, request: Request):
+    _check_rate_limit(request)
     initial_state = {
         "company_name": req.company,
         "category": req.category,
@@ -53,8 +104,9 @@ def investigate(req: InvestigateRequest):
 
     try:
         final_state = dd_graph.invoke(initial_state)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Investigation failed for company=%r", req.company)
+        raise HTTPException(status_code=500, detail="Internal error — investigation failed")
 
     return {
         "company": req.company,
@@ -65,15 +117,16 @@ def investigate(req: InvestigateRequest):
 
 
 @router.get("/audit/{company}")
-def get_audit(company: str):
+def get_audit(company: str = Path(min_length=1, max_length=200)):
     """
     Return the full investigation audit trail for a supplier, newest first.
     Up to 50 records are kept per supplier.
     """
     try:
         history = _get_hermes().get_audit(company)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Audit lookup failed for company=%r", company)
+        raise HTTPException(status_code=500, detail="Internal error — audit lookup failed")
     return {
         "company": company,
         "investigation_count": len(history),
@@ -82,12 +135,13 @@ def get_audit(company: str):
 
 
 @router.get("/audit/{company}/latest")
-def get_audit_latest(company: str):
+def get_audit_latest(company: str = Path(min_length=1, max_length=200)):
     """Return only the most recent audit record for a supplier."""
     try:
         history = _get_hermes().get_audit(company)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Audit lookup failed for company=%r", company)
+        raise HTTPException(status_code=500, detail="Internal error — audit lookup failed")
     if not history:
         raise HTTPException(status_code=404, detail=f"No audit records found for '{company}'")
     return history[0]
@@ -104,6 +158,13 @@ _CSV_FIELDS = [
     "hermes_tracked", "hermes_registered",
     "required_next_steps",
 ]
+
+
+def _csv_safe(value):
+    """Neutralise spreadsheet formula injection (=, +, -, @, tab, CR prefixes)."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 def _records_to_csv(records: list[dict]) -> str:
@@ -139,7 +200,7 @@ def _records_to_csv(records: list[dict]) -> str:
             "hermes_registered": r.get("hermes_registered", ""),
             "required_next_steps": " | ".join(steps) if steps else "",
         }
-        writer.writerow(row)
+        writer.writerow({k: _csv_safe(v) for k, v in row.items()})
     return buf.getvalue()
 
 
@@ -149,8 +210,9 @@ def export_all_csv():
     hermes = _get_hermes()
     try:
         slugs = hermes.get_all_audit_slugs()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("CSV export failed listing audit slugs")
+        raise HTTPException(status_code=500, detail="Internal error — export failed")
     all_records = []
     for slug in slugs:
         try:
@@ -167,16 +229,18 @@ def export_all_csv():
 
 
 @router.get("/audit/{company}/export/csv")
-def export_company_csv(company: str):
+def export_company_csv(company: str = Path(min_length=1, max_length=200)):
     """Export audit history for a single supplier as a CSV file."""
     try:
         history = _get_hermes().get_audit(company)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("CSV export failed for company=%r", company)
+        raise HTTPException(status_code=500, detail="Internal error — export failed")
     if not history:
         raise HTTPException(status_code=404, detail=f"No audit records found for '{company}'")
     csv_content = _records_to_csv(history)
-    safe_name = company.replace(" ", "_").replace("/", "_")
+    # Whitelist filename chars — user input must not reach the Content-Disposition header raw
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", company)[:80] or "supplier"
     return StreamingResponse(
         iter([csv_content]),
         media_type="text/csv",

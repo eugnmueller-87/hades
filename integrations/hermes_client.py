@@ -6,6 +6,7 @@ and UPSTASH_REDIS_REST_TOKEN in .env.
 
 import os
 import json
+import re
 from datetime import datetime
 from difflib import get_close_matches
 from upstash_redis import Redis
@@ -57,7 +58,12 @@ class HermesClient:
         self._slug_cache = None
 
     def _slug(self, name: str) -> str:
-        return name.lower().strip().replace(" ", "_").replace("-", "_").replace(".", "_")
+        slug = name.lower().strip().replace(" ", "_").replace("-", "_").replace(".", "_")
+        # Whitelist word chars (unicode-aware, so existing keys like "müller_gmbh"
+        # still resolve) — keeps colons/newlines/etc. out of Redis key names —
+        # and bound length so arbitrary input can't create huge keys.
+        slug = re.sub(r"[^\w]", "_", slug)
+        return slug[:100]
 
     def _known_slugs(self) -> list[str]:
         if self._slug_cache is None:
