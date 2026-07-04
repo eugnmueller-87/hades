@@ -125,14 +125,14 @@ Claude scores each dimension independently based on research outputs:
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/investigate` | Run full DD pipeline |
-| GET | `/audit/{company}` | Full investigation history (newest first, max 50) |
-| GET | `/audit/{company}/latest` | Most recent audit record only. Returns 404 if none. |
-| GET | `/audit/export/csv` | Portfolio CSV — all investigated suppliers |
-| GET | `/audit/{company}/export/csv` | Single supplier audit trail as CSV |
-| GET | `/health` | `{"status": "ok", "agent": "hades", "version": "0.1.0"}` |
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| POST | `/investigate` | Run full DD pipeline | X-API-Key |
+| GET | `/audit/{company}` | Full investigation history (newest first, max 50) | X-API-Key |
+| GET | `/audit/{company}/latest` | Most recent audit record only. Returns 404 if none. | X-API-Key |
+| GET | `/audit/export/csv` | Portfolio CSV — all investigated suppliers | X-API-Key |
+| GET | `/audit/{company}/export/csv` | Single supplier audit trail as CSV | X-API-Key |
+| GET | `/health` | `{"status": "ok", "agent": "hades", "version": "0.1.0"}` | Public |
 
 ---
 
@@ -147,6 +147,33 @@ UPSTASH_REDIS_REST_TOKEN   Shared with Hermes and SpendLens
 ```
 
 Hades validates all 5 at startup and refuses to start if any are missing.
+
+**Optional:**
+
+```
+HADES_API_KEY              API-key auth for all endpoints except /health.
+                           Comma-separated for multiple consumers (Icarus,
+                           SpendLens). If unset, the API runs OPEN and logs a
+                           warning at startup.
+INVESTIGATE_RATE_LIMIT     Max /investigate requests per window (default 10).
+INVESTIGATE_RATE_WINDOW    Rate-limit window in seconds (default 3600).
+LOG_LEVEL                  Logging level (default INFO).
+```
+
+## Authentication
+
+Every endpoint except `/health` requires a valid key in the `X-API-Key`
+header when `HADES_API_KEY` is set. Keys are compared in constant time.
+Callers without a valid key receive `401`. `/health` is always public so the
+Railway healthcheck keeps working. If `HADES_API_KEY` is unset, auth is
+disabled (open API) and a warning is logged — provision the key before
+exposing the service.
+
+```http
+POST /investigate
+X-API-Key: <your-key>
+Content-Type: application/json
+```
 
 ---
 

@@ -5,13 +5,21 @@ import os
 import re
 import threading
 import time
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from agent.graph import dd_graph
+from api.auth import require_api_key
 from integrations.hermes_client import HermesClient
 
-router = APIRouter()
+# Public router — no auth. Only /health lives here (Railway healthcheck must
+# not require a key).
+public_router = APIRouter()
+
+# Protected router — every route requires a valid X-API-Key (no-op when auth
+# is disabled). Attaching the dependency here means any endpoint added later
+# is protected by default.
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 logger = logging.getLogger("hades.api")
 
@@ -75,7 +83,7 @@ class InvestigateRequest(BaseModel):
         return v
 
 
-@router.get("/health")
+@public_router.get("/health")
 def health():
     return {"status": "ok", "agent": "hades", "version": "0.1.0"}
 
