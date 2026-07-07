@@ -153,21 +153,28 @@ Hades validates all 5 at startup and refuses to start if any are missing.
 ```
 HADES_API_KEY              API-key auth for all endpoints except /health.
                            Comma-separated for multiple consumers (Icarus,
-                           SpendLens). If unset, the API runs OPEN and logs a
-                           warning at startup.
+                           SpendLens). REQUIRED: if unset, protected endpoints
+                           return 503 (fail-closed) — the API does NOT run open.
+HADES_ALLOW_NO_AUTH        Set to 1 to run WITHOUT auth (local dev only). This
+                           is the only way to disable auth; it can never be
+                           tripped by simply forgetting to set HADES_API_KEY.
 INVESTIGATE_RATE_LIMIT     Max /investigate requests per window (default 10).
 INVESTIGATE_RATE_WINDOW    Rate-limit window in seconds (default 3600).
 LOG_LEVEL                  Logging level (default INFO).
 ```
 
-## Authentication
+## Authentication (fail-closed)
 
-Every endpoint except `/health` requires a valid key in the `X-API-Key`
-header when `HADES_API_KEY` is set. Keys are compared in constant time.
-Callers without a valid key receive `401`. `/health` is always public so the
-Railway healthcheck keeps working. If `HADES_API_KEY` is unset, auth is
-disabled (open API) and a warning is logged — provision the key before
-exposing the service.
+Every endpoint except `/health` requires a valid key in the `X-API-Key` header.
+Keys are compared in constant time; a missing/invalid key on a protected
+endpoint returns `401`. `/health` is always public so the Railway healthcheck
+keeps working.
+
+**Fail-closed by default:** if `HADES_API_KEY` is unset, protected endpoints
+return `503` (service refuses to run unprotected) — this is a compliance-facing
+due-diligence service and must never expose investigations on a forgotten key.
+To run without auth in local development, set `HADES_ALLOW_NO_AUTH=1` — an
+explicit, loud opt-in that never happens by accident. See `api/auth.py`.
 
 ```http
 POST /investigate
