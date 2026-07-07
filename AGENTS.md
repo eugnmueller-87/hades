@@ -116,7 +116,7 @@ Claude scores each dimension independently based on research outputs:
 ## Constraints & Guardrails
 
 - **No hallucination of sources.** Claude must cite only data returned by the research nodes. If a source returns no data, Claude must say so — not invent findings.
-- **Structured output only.** Both synthesis and report_generator use Claude tool_use to produce JSON. Free-text narrative is only allowed inside designated string fields (`executive_summary`, `rationale`).
+- **Structured output.** Both synthesis and report_generator prompt Claude for JSON and parse it deterministically (`parse_json_response`: strip fences → `json.loads`). There is no model-side retry on malformed JSON — instead the code fails safe (synthesis scores neutral and the deterministic decider produces the verdict), so a bad response cannot yield a hallucinated recommendation. Free-text narrative is only allowed inside designated string fields (`executive_summary`, `rationale`).
 - **Audit failure is non-fatal.** If `audit_writer` fails, the DD response is still returned. The exception is swallowed silently — audit failure must never break the user-facing response.
 - **Hermes registration is idempotent.** If the supplier is already on the Hermes watchlist, `register_vendor()` returns `False` and does nothing. No duplicate entries.
 - **No PII or credentials in state.** `DDState` contains company data and research outputs only.
@@ -200,5 +200,5 @@ Skills source: `Personal-Assistent/bot/skills/hades.py`
 | Sanctions XML fetch fails | Node returns `{"error": "unavailable"}`; synthesis flags this explicitly in the report |
 | Hermes Redis unreachable (pre-flight) | `skip_news = False`; all nodes run full; no crash |
 | `audit_writer` fails | Exception swallowed; DD report still returned |
-| Claude returns malformed JSON | `parse_json_response()` in `_utils.py` retries with a correction prompt once |
+| Claude returns malformed JSON | `parse_json_response()` in `_utils.py` raises `ValueError`; synthesis catches it and fails SAFE — scores every dimension neutral and lets the deterministic decider produce the verdict (no model retry, no hallucinated recommendation) |
 | HTTP 5xx from Hades (SpendLens proxy) | `raise_for_status()` propagates as `HTTPException(5xx)` to SpendLens caller |

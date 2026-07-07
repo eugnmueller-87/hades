@@ -135,3 +135,50 @@ def test_clean_company_approves():
 def test_verdict_provenance_marker():
     verdict = decide({d: {"score": 5} for d in WEIGHTS}, {})
     assert verdict["_decided_by"] == "deterministic"
+
+
+# ── FAIL-CLOSED: a degraded/unverified sanctions screen can never be a silent Approve ──
+# This is the compliance-critical rule. If a watchlist could not be fetched, "no hit" is
+# unverified, not clean — an OFAC/UN outage must NOT let a possibly-sanctioned entity through.
+def test_degraded_sanctions_blocks_clean_approve():
+    # Every dimension scores clean (would be Low/Approve) BUT the screen was degraded.
+    scores = {d: {"score": 1} for d in WEIGHTS}
+    verdict = decide(scores, {
+        "is_sanctioned": False,          # no hit found — but only because OFAC was down
+        "sanctions_degraded": True,
+        "sources_unavailable": ["OFAC SDN"],
+    })
+    assert verdict["risk_level"] == "Low"                       # the score is still low…
+    assert verdict["recommendation"] != "Approve"              # …but it must NOT auto-approve
+    assert verdict["recommendation"] == "Conditional Approval"
+    assert any("degraded" in r.lower() or "unverified" in r.lower()
+               for r in verdict["override_reasons"])
+
+
+def test_manual_review_required_forces_conditional():
+    scores = {d: {"score": 1} for d in WEIGHTS}
+    verdict = decide(scores, {"manual_review_required": True})
+    assert verdict["recommendation"] == "Conditional Approval"
+
+
+def test_degraded_reason_names_the_unavailable_source():
+    scores = {d: {"score": 1} for d in WEIGHTS}
+    verdict = decide(scores, {"sanctions_degraded": True,
+                              "sources_unavailable": ["UN SC Consolidated List"]})
+    assert any("UN SC Consolidated List" in r for r in verdict["override_reasons"])
+
+
+def test_degraded_screen_never_softens_a_block():
+    # Monotonic: a real sanctions Block stays Block even with the degraded flag also set.
+    scores = {d: {"score": 10} for d in WEIGHTS}
+    verdict = decide(scores, {"is_sanctioned": True, "priority_hit": True,
+                              "sanctions_degraded": True})
+    assert verdict["recommendation"] == "Block"
+
+
+def test_clean_verified_screen_still_approves():
+    # Guard against over-correction: a fully clean AND verified screen must still Approve.
+    scores = {d: {"score": 1} for d in WEIGHTS}
+    verdict = decide(scores, {"is_sanctioned": False, "sanctions_degraded": False,
+                              "manual_review_required": False, "company_status": "active"})
+    assert verdict["recommendation"] == "Approve"

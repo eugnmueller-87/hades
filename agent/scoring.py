@@ -110,6 +110,18 @@ def apply_overrides(recommendation: str, scores: dict, signals: dict) -> tuple[s
         rec = _escalate(rec, "Conditional Approval")
         reasons.append("Sanctions dimension score >= 9 → at least Conditional")
 
+    # 5. A DEGRADED sanctions screen (a watchlist could not be fetched, so "no hit" is
+    #    unverified, not clean) can never be a silent Approve. This is the fail-closed rule:
+    #    an unchecked source is treated as an open risk requiring human review, not absence
+    #    of risk. Without this, an OFAC/UN outage would let a sanctioned entity read as clean.
+    if signals.get("sanctions_degraded") or signals.get("manual_review_required"):
+        rec = _escalate(rec, "Conditional Approval")
+        unavailable = signals.get("sources_unavailable") or []
+        detail = f" (unverified: {', '.join(unavailable)})" if unavailable else ""
+        reasons.append(
+            f"Sanctions screen degraded/unverified → at least Conditional (manual review){detail}"
+        )
+
     return rec, reasons
 
 
