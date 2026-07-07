@@ -116,7 +116,7 @@ Claude scores each dimension independently based on research outputs:
 ## Constraints & Guardrails
 
 - **No hallucination of sources.** Claude must cite only data returned by the research nodes. If a source returns no data, Claude must say so — not invent findings.
-- **Structured output only.** Both synthesis and report_generator use Claude tool_use to produce JSON. Free-text narrative is only allowed inside designated string fields (`executive_summary`, `rationale`).
+- **Structured output.** Both synthesis and report_generator prompt Claude for JSON and parse it deterministically (`parse_json_response`: strip fences → `json.loads`). There is no model-side retry on malformed JSON — instead the code fails safe (synthesis scores neutral and the deterministic decider produces the verdict), so a bad response cannot yield a hallucinated recommendation. Free-text narrative is only allowed inside designated string fields (`executive_summary`, `rationale`).
 - **Audit failure is non-fatal.** If `audit_writer` fails, the DD response is still returned. The exception is swallowed silently — audit failure must never break the user-facing response.
 - **Hermes registration is idempotent.** If the supplier is already on the Hermes watchlist, `register_vendor()` returns `False` and does nothing. No duplicate entries.
 - **No PII or credentials in state.** `DDState` contains company data and research outputs only.
@@ -125,14 +125,14 @@ Claude scores each dimension independently based on research outputs:
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/investigate` | Run full DD pipeline |
-| GET | `/audit/{company}` | Full investigation history (newest first, max 50) |
-| GET | `/audit/{company}/latest` | Most recent audit record only. Returns 404 if none. |
-| GET | `/audit/export/csv` | Portfolio CSV — all investigated suppliers |
-| GET | `/audit/{company}/export/csv` | Single supplier audit trail as CSV |
-| GET | `/health` | `{"status": "ok", "agent": "hades", "version": "0.1.0"}` |
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| POST | `/investigate` | Run full DD pipeline | X-API-Key |
+| GET | `/audit/{company}` | Full investigation history (newest first, max 50) | X-API-Key |
+| GET | `/audit/{company}/latest` | Most recent audit record only. Returns 404 if none. | X-API-Key |
+| GET | `/audit/export/csv` | Portfolio CSV — all investigated suppliers | X-API-Key |
+| GET | `/audit/{company}/export/csv` | Single supplier audit trail as CSV | X-API-Key |
+| GET | `/health` | `{"status": "ok", "agent": "hades", "version": "0.1.0"}` | Public |
 
 ---
 
@@ -147,6 +147,40 @@ UPSTASH_REDIS_REST_TOKEN   Shared with Hermes and SpendLens
 ```
 
 Hades validates all 5 at startup and refuses to start if any are missing.
+
+**Optional:**
+
+```
+HADES_API_KEY              API-key auth for all endpoints except /health.
+                           Comma-separated for multiple consumers (Icarus,
+                           SpendLens). REQUIRED: if unset, protected endpoints
+                           return 503 (fail-closed) — the API does NOT run open.
+HADES_ALLOW_NO_AUTH        Set to 1 to run WITHOUT auth (local dev only). This
+                           is the only way to disable auth; it can never be
+                           tripped by simply forgetting to set HADES_API_KEY.
+INVESTIGATE_RATE_LIMIT     Max /investigate requests per window (default 10).
+INVESTIGATE_RATE_WINDOW    Rate-limit window in seconds (default 3600).
+LOG_LEVEL                  Logging level (default INFO).
+```
+
+## Authentication (fail-closed)
+
+Every endpoint except `/health` requires a valid key in the `X-API-Key` header.
+Keys are compared in constant time; a missing/invalid key on a protected
+endpoint returns `401`. `/health` is always public so the Railway healthcheck
+keeps working.
+
+**Fail-closed by default:** if `HADES_API_KEY` is unset, protected endpoints
+return `503` (service refuses to run unprotected) — this is a compliance-facing
+due-diligence service and must never expose investigations on a forgotten key.
+To run without auth in local development, set `HADES_ALLOW_NO_AUTH=1` — an
+explicit, loud opt-in that never happens by accident. See `api/auth.py`.
+
+```http
+POST /investigate
+X-API-Key: <your-key>
+Content-Type: application/json
+```
 
 ---
 
@@ -173,5 +207,5 @@ Skills source: `Personal-Assistent/bot/skills/hades.py`
 | Sanctions XML fetch fails | Node returns `{"error": "unavailable"}`; synthesis flags this explicitly in the report |
 | Hermes Redis unreachable (pre-flight) | `skip_news = False`; all nodes run full; no crash |
 | `audit_writer` fails | Exception swallowed; DD report still returned |
-| Claude returns malformed JSON | `parse_json_response()` in `_utils.py` retries with a correction prompt once |
+| Claude returns malformed JSON | `parse_json_response()` in `_utils.py` raises `ValueError`; synthesis catches it and fails SAFE — scores every dimension neutral and lets the deterministic decider produce the verdict (no model retry, no hallucinated recommendation) |
 | HTTP 5xx from Hades (SpendLens proxy) | `raise_for_status()` propagates as `HTTPException(5xx)` to SpendLens caller |

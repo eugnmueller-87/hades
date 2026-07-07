@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 
 from fastapi import FastAPI
-from api.routes import router
+from api.routes import public_router, router
 
 _REQUIRED_ENV_VARS = [
     "ANTHROPIC_API_KEY",
@@ -30,6 +30,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.include_router(public_router)
 app.include_router(router)
 
 

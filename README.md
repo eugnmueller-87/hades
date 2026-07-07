@@ -39,14 +39,20 @@ Send a company name, category, and country. Hades runs 6 parallel research pipel
 
 ### Risk Dimensions
 
-| Dimension | Data Source |
+| Dimension | How it's sourced |
 |---|---|
-| Sanctions & Watchlists | OFAC SDN XML + UN SC Consolidated List (free, no API key) |
-| LkSG / CSDDD Compliance | BAFA, OECD NCP, ECCHR/NGO signals |
-| Company Registry | NorthData + Unternehmensregister |
-| News Sentiment | newsapi.ai — last 90 days |
-| ESG & Labour | EcoVadis, ILO, Transparency Intl, Violation Tracker |
-| Hermes Intelligence | Live SpendLens market signals |
+| Sanctions & Watchlists | **Direct**: OFAC SDN XML + UN SC Consolidated List (free, no API key), name-matched. EU FSF flagged for manual check. |
+| LkSG / CSDDD Compliance | **Web search** (Serper) for BAFA / OECD NCP / ECCHR / NGO signals, keyword-classified — not a direct DB integration |
+| Company Registry | **Web search** (Serper, `site:northdata.com` / `site:unternehmensregister.de`), HRB/status extracted by regex — not a registry API |
+| News Sentiment | **Web search** for recent news, LLM-scored |
+| ESG & Labour | **Web search** (Serper) for EcoVadis / ILO / Transparency Intl / Violation Tracker mentions, keyword-classified — not those providers' APIs |
+| Hermes Intelligence | Live Hermes supplier signals (Redis) |
+
+> **Honest note on method:** 4 of the 6 dimensions (LkSG, registry, news, ESG) are **web-search-based
+> signal detection** — Serper/Google queries with `site:` filters, then LLM/keyword classification —
+> not direct integrations with those authorities' databases. Only sanctions screening reads primary
+> source lists directly. This is a fast, cheap, no-API-key approach suited to a first-pass screen; a
+> production deployment would upgrade the highest-value dimensions to paid direct feeds.
 
 ---
 
@@ -129,7 +135,14 @@ Icarus exposes Hades-related tools to the user via Telegram:
 
 ## SpendLens Integration
 
-When a new vendor is created in SpendLens, Hades runs a full investigation automatically. The recommendation (`Approve` / `Conditional Approval` / `Block`) gates the onboarding decision. Every investigated supplier is automatically added to the Hermes watchlist for ongoing monitoring.
+**Status: planned, not wired.** The intended design: when a new vendor is created in SpendLens,
+Hades runs a full investigation automatically and the recommendation (`Approve` / `Conditional
+Approval` / `Block`) gates the onboarding decision. The connector that would trigger this
+(`integrations/spendlens_connector.py`) is currently a stub (`# TODO: implement`) — investigations
+today are triggered manually via the API / the ICARUS skill, not auto-fired by SpendLens.
+
+What IS wired: every investigated supplier is automatically added to the Hermes watchlist for
+ongoing monitoring (`agent/nodes/hermes_register.py`).
 
 ---
 

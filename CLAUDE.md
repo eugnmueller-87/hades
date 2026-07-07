@@ -79,8 +79,13 @@ curl -X POST localhost:8000/investigate -H 'Content-Type: application/json' \
 - **`audit_writer` failure is deliberately non-fatal** — the exception is swallowed so a Redis
   hiccup never breaks the user-facing DD response. This is the *one* sanctioned silent-swallow;
   everywhere else, fail loud (Operating Rule 3). Don't "fix" it into a raise.
-- **Structured output only** — synthesis + report_generator use Claude `tool_use` to emit JSON.
-  Free-text only in `executive_summary` / `rationale`. Never trust/eval model output.
+- **Structured output** — synthesis + report_generator prompt Claude for JSON, then parse it
+  deterministically via `parse_json_response` (`agent/nodes/_utils.py`): markdown fences are
+  stripped and `json.loads` is applied. On a parse failure the code does NOT retry the model —
+  it fails safe: synthesis scores every dimension neutral and lets the deterministic decider
+  (`agent.scoring.decide`) produce the verdict, so a malformed response can never yield a
+  hallucinated recommendation. Free-text only in `executive_summary` / `rationale`. Never
+  trust/eval model output.
 - **No hallucinated sources** — Claude cites only data the research nodes returned. A node with
   no data → say so, don't invent findings. Degrade gracefully; minimum viable = Serper + Anthropic.
 - **Startup fails fast** — `main.py` refuses to boot if any of the 5 required env vars is missing.

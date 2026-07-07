@@ -5,13 +5,21 @@ import os
 import re
 import threading
 import time
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from agent.graph import dd_graph
+from api.auth import require_api_key
 from integrations.hermes_client import HermesClient
 
-router = APIRouter()
+# Public router — no auth. Only /health lives here (Railway healthcheck must
+# not require a key).
+public_router = APIRouter()
+
+# Protected router — every route requires a valid X-API-Key (no-op when auth
+# is disabled). Attaching the dependency here means any endpoint added later
+# is protected by default.
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 logger = logging.getLogger("hades.api")
 
@@ -36,13 +44,31 @@ _RATE_WINDOW = int(os.environ.get("INVESTIGATE_RATE_WINDOW", "3600"))   # second
 _rate_lock = threading.Lock()
 _rate_hits: dict[str, list[float]] = {}
 
+# GLOBAL spend cap (the DN42 lesson): a per-IP limit is defeated by X-Forwarded-For spoofing,
+# so a hard total ceiling on investigations per rolling day bounds worst-case paid-API spend
+# (each /investigate fires paid Serper + Anthropic calls) REGARDLESS of source IP. When the cap
+# is hit the service returns 429 until the window rolls — a spoofing attacker cannot exceed it.
+_GLOBAL_DAILY_CAP = int(os.environ.get("INVESTIGATE_GLOBAL_DAILY_CAP", "200"))  # 0 disables
+_GLOBAL_WINDOW = 86_400  # 24h rolling
+_global_hits: list[float] = []
+
 
 def _check_rate_limit(request: Request) -> None:
+    now = time.time()
+    # 1) Global spend cap first — IP-independent, cannot be bypassed by spoofing.
+    if _GLOBAL_DAILY_CAP > 0:
+        with _rate_lock:
+            _global_hits[:] = [t for t in _global_hits if now - t < _GLOBAL_WINDOW]
+            if len(_global_hits) >= _GLOBAL_DAILY_CAP:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Global daily investigation cap reached — protects against paid-API cost runaway.",
+                )
+    # 2) Per-IP window (best-effort; layered under the global cap).
     forwarded = request.headers.get("x-forwarded-for", "")
     ip = forwarded.split(",")[0].strip() if forwarded else (
         request.client.host if request.client else "unknown"
     )
-    now = time.time()
     with _rate_lock:
         if len(_rate_hits) > 10_000:  # bound memory under IP churn
             _rate_hits.clear()
@@ -51,6 +77,8 @@ def _check_rate_limit(request: Request) -> None:
             raise HTTPException(status_code=429, detail="Rate limit exceeded — try again later")
         hits.append(now)
         _rate_hits[ip] = hits
+        # Count toward the global cap only once past both gates.
+        _global_hits.append(now)
 
 
 class InvestigateRequest(BaseModel):
@@ -75,7 +103,7 @@ class InvestigateRequest(BaseModel):
         return v
 
 
-@router.get("/health")
+@public_router.get("/health")
 def health():
     return {"status": "ok", "agent": "hades", "version": "0.1.0"}
 

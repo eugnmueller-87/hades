@@ -3,17 +3,37 @@ from integrations.serper_client import serper_search as _serper
 
 
 # Signals that indicate actual LkSG/CSDDD compliance problems
+# ADVERSE-FINDING terms only — words that indicate an ACTUAL problem (a fine, a lawsuit, a
+# proven violation, forced/child labour). These do NOT appear just because we searched.
+# NOTE: query-echo terms (BAFA, NCP, LkSG, Lieferkettengesetz, "human rights", Germanwatch,
+# ECCHR, "supply chain due diligence", "complaint") are DELIBERATELY EXCLUDED — they appear in
+# results simply because they were the search query, so counting them flags a company's own
+# compliance page as a red flag. That echo made this classifier a false-positive machine.
 HARD_FLAGS = [
-    "BAFA", "Beschwerde", "Bußgeld", "Klage", "Menschenrechtsverletzung",
-    "NCP", "complaint", "enforcement", "violation", "human rights abuse",
-    "forced labour", "Zwangsarbeit", "Kinderarbeit", "child labour",
-    "Germanwatch", "ECCHR", "Bread for the World", "Lieferkettengesetz",
+    "Bußgeld", "Geldstrafe", "Klage", "verurteilt", "convicted", "fined", "penalty",
+    "Menschenrechtsverletzung", "human rights abuse", "human rights violation",
+    "forced labour", "forced labor", "Zwangsarbeit", "Kinderarbeit", "child labour", "child labor",
+    "Ausbeutung", "exploitation", "sanctioned", "banned", "Verstoß gegen", "found guilty",
+]
+
+# A finding is only credible if an adverse term appears NEAR a negative/enforcement context,
+# not in isolation (e.g. "no violation found" or "committed to preventing forced labour" must
+# NOT flag). We require an adverse term AND that the snippet is not obviously a negation/positive.
+_NEGATION_CUES = [
+    "no violation", "keine verstöße", "keine verletzung", "not found", "cleared",
+    "committed to", "verpflichtet sich", "prevent", "prevention", "policy against",
+    "zero tolerance", "compliance with", "einhaltung",
 ]
 
 
 def _flag_result(result: dict) -> bool:
     text = (result.get("title", "") + " " + result.get("snippet", "")).lower()
-    return any(kw.lower() in text for kw in HARD_FLAGS)
+    if not any(kw.lower() in text for kw in HARD_FLAGS):
+        return False
+    # Adverse term present — but suppress obvious negations / policy statements.
+    if any(neg in text for neg in _NEGATION_CUES):
+        return False
+    return True
 
 
 def lksg_signals(state: DDState) -> dict:

@@ -23,6 +23,12 @@ def _hard_signals(state: DDState) -> dict:
         "priority_hit": bool(sanctions.get("priority_hit")),
         "company_status": registry.get("company_status"),
         "compliance_signal": lksg.get("compliance_signal"),
+        # Degraded/unverified screening MUST reach the decider. A source that could not be
+        # fetched returns "no hits" only because it was never checked — that is NOT a clean
+        # result and must never yield a silent Approve (fail-closed, per sanctions_check).
+        "sanctions_degraded": (sanctions.get("status") == "degraded"),
+        "manual_review_required": bool(sanctions.get("manual_review_required")),
+        "sources_unavailable": list(sanctions.get("sources_unavailable", []) or []),
     }
 
 
