@@ -1,6 +1,6 @@
 # Hades — Supplier Due Diligence Agent
 
-![Live](https://img.shields.io/badge/Live-Railway-brightgreen)
+[![Live](https://img.shields.io/badge/Live-Railway-brightgreen)](https://hades-production-b86a.up.railway.app/health)
 ![Stack](https://img.shields.io/badge/Stack-FastAPI_+_LangGraph_+_Redis-blue)
 ![AI](https://img.shields.io/badge/AI-Claude_Sonnet_4.6-orange)
 ![Compliance](https://img.shields.io/badge/Compliance-LkSG_%2F_CSDDD-green)
