@@ -1,6 +1,6 @@
 # Hades — Supplier Due Diligence Agent
 
-[![Live](https://img.shields.io/badge/Live-Railway-brightgreen)](https://hades-production-b86a.up.railway.app/health)
+![Status](https://img.shields.io/badge/status-paused_since_Nov_2026-lightgrey)
 ![Stack](https://img.shields.io/badge/Stack-FastAPI_+_LangGraph_+_Redis-blue)
 ![AI](https://img.shields.io/badge/AI-Claude_Sonnet_4.6-orange)
 ![Compliance](https://img.shields.io/badge/Compliance-LkSG_%2F_CSDDD-green)
@@ -12,7 +12,7 @@
 
 > **SpendLens procurement stack:** Icarus (personal AI OS) · SpendLens (spend analytics) · **Hades** (supplier vetting) · Hermes (market intelligence)
 
-**Live:** `https://hades-production-b86a.up.railway.app` · **[Project board](https://github.com/users/eugnmueller-87/projects/8/views/1)**
+**Status:** the Railway deployment is paused since November 2026; code and screenshots are current · **[Project board](https://github.com/users/eugnmueller-87/projects/8/views/1)**
 
 ---
 
