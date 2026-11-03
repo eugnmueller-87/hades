@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hades due diligence</title>
+<meta name="description" content="Hades, an autonomous supplier due-diligence agent: the model scores six risk dimensions, deterministic code decides. Try the decision logic in your browser.">
+<style>
+  :root {
+    --bg: #f6f5f3; --card: #ffffff; --text: #1d1b19; --muted: #645f58; --line: #e4e0da;
+    --accent: #8b1e1e; --track: #e8e4de;
+    --ok: #1f7a4a; --warn: #a3650a; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141312; --card: #1d1b1a; --text: #ece9e4; --muted: #a59f97; --line: #302d2a;
+      --accent: #ef8b80; --track: #34302c;
+      --ok: #5cc98d; --warn: #f0b45a; --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: clamp(26px, 4.5vw, 36px); margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 36px 0 6px; }
+  .lead { color: var(--muted); max-width: 700px; margin: 0 0 6px; }
+  .status { color: var(--muted); font-size: 13px; margin: 0 0 22px; }
+  a { color: var(--accent); }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  figure img { display: block; width: 100%; height: auto; }
+  figcaption { padding: 10px 14px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 700px; }
+  .calc { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .calc { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .dim { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin-bottom: 14px; }
+  .dim label { font-weight: 600; }
+  .dim .w { color: var(--muted); font-size: 13px; font-weight: 400; }
+  .dim output { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .dim input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+  .flags { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 14px; display: grid; gap: 8px; }
+  .flags label { display: flex; gap: 8px; align-items: flex-start; }
+  .flags input { margin-top: 4px; accent-color: var(--accent); }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+  .presets button {
+    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  .score { font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .band { color: var(--muted); margin: 4px 0 14px; }
+  .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; margin-bottom: 16px; }
+  .bar span { display: block; height: 100%; background: var(--accent); }
+  .rec { font-size: 20px; font-weight: 700; }
+  .rec.Approve { color: var(--ok); } .rec.Conditional { color: var(--warn); } .rec.Block { color: var(--bad); }
+  .reasons { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  .prov { margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .foot { margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hades</h1>
+  <p class="lead">An autonomous supplier due-diligence agent. Six research nodes check sanctions (OFAC, UN), the company
+    registry, LkSG and CSDDD signals, ESG and labour risk, news sentiment and Hermes market intelligence. Claude scores
+    each dimension from 1 to 10; tested deterministic code turns those scores into the verdict.</p>
+  <p class="status">The live agent is paused since November 2026. Below: a real investigation from May 2026, and the
+    decision logic itself, running in your browser.</p>
+
+  <figure>
+    <img src="bosch-investigation.png" width="2151" height="1473" alt="Hades investigation of Bosch: risk score 5.0, risk level High, the six research steps completed">
+    <figcaption>A real investigation, run on 16 May 2026 through the live agent. Back then the model also set the
+      risk band and called a 5.0 "High". Since 4 July 2026 the code below decides the band, and 5.0 is Medium.</figcaption>
+  </figure>
+
+  <h2>The model advises, the code decides</h2>
+  <p class="sub">Set the six dimension scores the model would return and the hard facts the research nodes found. The
+    weighted score, the risk band, the recommendation and every override come from a direct port of
+    <a href="https://github.com/eugnmueller-87/hades/blob/master/agent/scoring.py"><code>agent/scoring.py</code></a>,
+    checked against the Python original on 20,000 random inputs. The example inputs are illustrations, not real companies.</p>
+
+  <div class="calc">
+    <div class="panel">
+      <div class="presets" id="presets">
+        <button data-p="clean">Clean supplier</button>
+        <button data-p="lksg">LkSG red flag</button>
+        <button data-p="sanctioned">Sanctions hit</button>
+        <button data-p="degraded">Sanctions list unavailable</button>
+      </div>
+      <div id="dims"></div>
+      <div class="flags">
+        <label><input type="checkbox" id="f-sanc"> Confirmed priority hit on a sanctions list</label>
+        <label><input type="checkbox" id="f-status"> Registry shows the company dissolved or insolvent</label>
+        <label><input type="checkbox" id="f-lksg"> LkSG/CSDDD research returned a red flag</label>
+        <label><input type="checkbox" id="f-degraded"> A sanctions list could not be fetched (screen unverified)</label>
+      </div>
+    </div>
+    <div class="panel" aria-live="polite">
+      <div class="score" id="score"></div>
+      <div class="band" id="band"></div>
+      <div class="bar"><span id="bar"></span></div>
+      <div class="rec" id="rec"></div>
+      <ul class="reasons" id="reasons"></ul>
+      <div class="prov">decided by: deterministic code, never the model</div>
+    </div>
+  </div>
+
+  <p class="foot">Code, tests and the research nodes:
+    <a href="https://github.com/eugnmueller-87/hades">github.com/eugnmueller-87/hades</a></p>
+</main>
+<script src="scoring.js"></script>
+<script>
+(function () {
+  var S = window.HadesScoring;
+  var LABELS = {
+    sanctions: "Sanctions and watchlists", registry: "Company registry", news_sentiment: "News sentiment",
+    lksg_csddd: "LkSG / CSDDD", esg_labour: "ESG and labour", hermes_intelligence: "Hermes market intelligence"
+  };
+  var PRESETS = {
+    clean:      { s: [1, 2, 2, 2, 2, 2], f: [false, false, false, false] },
+    lksg:       { s: [1, 2, 3, 7, 4, 2], f: [false, false, true, false] },
+    sanctioned: { s: [9.5, 3, 5, 4, 4, 3], f: [true, false, false, false] },
+    degraded:   { s: [2, 2, 2, 2, 2, 2], f: [false, false, false, true] }
+  };
+  var dims = Object.keys(S.WEIGHTS);
+  var $ = function (id) { return document.getElementById(id); };
+
+  $("dims").innerHTML = dims.map(function (d) {
+    return '<div class="dim"><label for="d-' + d + '">' + LABELS[d] + ' <span class="w">weight ' +
+      Math.round(S.WEIGHTS[d] * 100) + ' %</span></label><output id="o-' + d + '" for="d-' + d + '"></output>' +
+      '<input type="range" id="d-' + d + '" min="1" max="10" step="0.5" value="2"></div>';
+  }).join("");
+
+  function compute() {
+    var scores = {};
+    dims.forEach(function (d) { scores[d] = Number($("d-" + d).value); $("o-" + d).textContent = scores[d].toFixed(1); });
+    var signals = {
+      is_sanctioned: $("f-sanc").checked, priority_hit: $("f-sanc").checked,
+      company_status: $("f-status").checked ? "insolvent" : "",
+      compliance_signal: $("f-lksg").checked ? "red_flag" : "",
+      sanctions_degraded: $("f-degraded").checked,
+      sources_unavailable: $("f-degraded").checked ? ["UN"] : []
+    };
+    var v = S.decide(scores, signals);
+    $("score").textContent = v.overall_risk_score.toFixed(1);
+    $("band").textContent = "Risk level: " + v.risk_level + " (weighted score out of 10)";
+    $("bar").style.width = (v.overall_risk_score * 10) + "%";
+    $("rec").textContent = v.recommendation;
+    $("rec").className = "rec " + v.recommendation.split(" ")[0];
+    $("reasons").innerHTML = v.override_reasons.length
+      ? v.override_reasons.map(function (r) { return "<li>" + r + "</li>"; }).join("")
+      : "<li>No override fired: the band decides.</li>";
+  }
+
+  function apply(name) {
+    var p = PRESETS[name];
+    dims.forEach(function (d, i) { $("d-" + d).value = p.s[i]; });
+    ["f-sanc", "f-status", "f-lksg", "f-degraded"].forEach(function (id, i) { $(id).checked = p.f[i]; });
+    compute();
+  }
+
+  document.querySelector(".calc").addEventListener("input", compute);
+  $("presets").addEventListener("click", function (e) { var b = e.target.closest("button"); if (b) apply(b.dataset.p); });
+  apply("clean");
+})();
+</script>
+</body>
+</html>
