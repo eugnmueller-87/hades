@@ -1,4 +1,4 @@
-# Hades — Supplier Due Diligence Agent
+# Hades: Supplier Due Diligence Agent
 
 ![Status](https://img.shields.io/badge/status-paused_since_Nov_2026-lightgrey)
 ![Stack](https://img.shields.io/badge/Stack-FastAPI_+_LangGraph_+_Redis-blue)
@@ -8,7 +8,7 @@
 
 
 
-**Hades** is the gatekeeper of the SpendLens procurement stack. It autonomously researches any supplier and generates a structured due diligence report — covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and live Hermes market intelligence — in under 2 minutes. No manual research. No spreadsheets.
+**Hades** is the gatekeeper of the SpendLens procurement stack. It autonomously researches any supplier and generates a structured due diligence report (covering sanctions, company registry, news sentiment, LkSG/CSDDD compliance, ESG signals, and live Hermes market intelligence) in under 2 minutes. No manual research. No spreadsheets.
 
 > **SpendLens procurement stack:** Icarus (personal AI OS) · SpendLens (spend analytics) · **Hades** (supplier vetting) · Hermes (market intelligence)
 
@@ -18,7 +18,7 @@
 
 ## Screenshot
 
-![Hades — Bosch investigation, High risk, score 5.0, investigation pipeline complete](screenshots/Screenshot%202026-05-16%20205825.png)
+![Hades: Bosch investigation, High risk, score 5.0, investigation pipeline complete](screenshots/Screenshot%202026-05-16%20205825.png)
 
 ---
 
@@ -29,27 +29,27 @@ Send a company name, category, and country. Hades runs 6 parallel research pipel
 - **Overall risk score** (1–10, weighted across 6 dimensions)
 - **Recommendation**: `Approve` / `Conditional Approval` / `Block`
 - **Executive summary** in plain language
-- **Company registry details** — legal status and registration
-- **Sanctions status** — OFAC SDN + UN SC Consolidated List
-- **LkSG/CSDDD compliance signal** — no findings / needs monitoring / red flag
-- **ESG & labour risk** — cross-referenced against major ESG databases
+- **Company registry details** (legal status and registration)
+- **Sanctions status**: OFAC SDN + UN SC Consolidated List
+- **LkSG/CSDDD compliance signal**: no findings / needs monitoring / red flag
+- **ESG & labour risk**, cross-referenced against major ESG databases
 - **Required next steps** surfaced to the procurement manager
-- **Hermes integration** — reads prior intelligence pre-flight, registers new suppliers post-report for ongoing monitoring
-- **Persistent audit trail** — every investigation saved, queryable via API
+- **Hermes integration**: reads prior intelligence pre-flight, registers new suppliers post-report for ongoing monitoring
+- **Persistent audit trail** (every investigation saved, queryable via API)
 
 ### Risk Dimensions
 
 | Dimension | How it's sourced |
 |---|---|
 | Sanctions & Watchlists | **Direct**: OFAC SDN XML + UN SC Consolidated List (free, no API key), name-matched. EU FSF flagged for manual check. |
-| LkSG / CSDDD Compliance | **Web search** (Serper) for BAFA / OECD NCP / ECCHR / NGO signals, keyword-classified — not a direct DB integration |
-| Company Registry | **Web search** (Serper, `site:northdata.com` / `site:unternehmensregister.de`), HRB/status extracted by regex — not a registry API |
+| LkSG / CSDDD Compliance | **Web search** (Serper) for BAFA / OECD NCP / ECCHR / NGO signals, keyword-classified, not a direct DB integration |
+| Company Registry | **Web search** (Serper, `site:northdata.com` / `site:unternehmensregister.de`), HRB/status extracted by regex, not a registry API |
 | News Sentiment | **Web search** for recent news, LLM-scored |
-| ESG & Labour | **Web search** (Serper) for EcoVadis / ILO / Transparency Intl / Violation Tracker mentions, keyword-classified — not those providers' APIs |
+| ESG & Labour | **Web search** (Serper) for EcoVadis / ILO / Transparency Intl / Violation Tracker mentions, keyword-classified (not those providers' APIs) |
 | Hermes Intelligence | Live Hermes supplier signals (Redis) |
 
 > **Honest note on method:** 4 of the 6 dimensions (LkSG, registry, news, ESG) are **web-search-based
-> signal detection** — Serper/Google queries with `site:` filters, then LLM/keyword classification —
+> signal detection** (Serper/Google queries with `site:` filters, then LLM/keyword classification),
 > not direct integrations with those authorities' databases. Only sanctions screening reads primary
 > source lists directly. This is a fast, cheap, no-API-key approach suited to a first-pass screen; a
 > production deployment would upgrade the highest-value dimensions to paid direct feeds.
@@ -138,7 +138,7 @@ Icarus exposes Hades-related tools to the user via Telegram:
 **Status: planned, not wired.** The intended design: when a new vendor is created in SpendLens,
 Hades runs a full investigation automatically and the recommendation (`Approve` / `Conditional
 Approval` / `Block`) gates the onboarding decision. The connector that would trigger this
-(`integrations/spendlens_connector.py`) is currently a stub (`# TODO: implement`) — investigations
+(`integrations/spendlens_connector.py`) is currently a stub (`# TODO: implement`). Investigations
 today are triggered manually via the API / the ICARUS skill, not auto-fired by SpendLens.
 
 What IS wired: every investigated supplier is automatically added to the Hermes watchlist for
@@ -172,15 +172,15 @@ All required environment variables are validated at startup.
 
 ## LkSG / CSDDD Context
 
-The **Lieferkettensorgfaltspflichtengesetz (LkSG)** — German Supply Chain Due Diligence Act — has been in force since January 2023 for companies with 1,000+ employees. It mandates risk-based due diligence across the full supply chain: human rights, environmental obligations, and grievance mechanisms.
+The **Lieferkettensorgfaltspflichtengesetz (LkSG)**, the German Supply Chain Due Diligence Act, has been in force since January 2023 for companies with 1,000+ employees. It mandates risk-based due diligence across the full supply chain: human rights, environmental obligations, and grievance mechanisms.
 
 The EU **CSDDD** (Corporate Sustainability Due Diligence Directive) extends equivalent requirements across all EU member states from 2026.
 
 Hades checks three authoritative sources for LkSG/CSDDD signals:
 
-- **BAFA** (Bundesamt für Wirtschaft und Ausfuhrkontrolle) — enforcement authority for LkSG
-- **OECD NCP** — National Contact Point complaints under OECD Guidelines for Multinational Enterprises
-- **NGO reports** — ECCHR, Germanwatch, Femnet e.V., and civil society organisations
+- **BAFA** (Bundesamt für Wirtschaft und Ausfuhrkontrolle), enforcement authority for LkSG
+- **OECD NCP**: National Contact Point complaints under OECD Guidelines for Multinational Enterprises
+- **NGO reports**: ECCHR, Germanwatch, Femnet e.V., and civil society organisations
 
 ---
 
@@ -188,7 +188,7 @@ Hades checks three authoritative sources for LkSG/CSDDD signals:
 
 | Agent | Role |
 |---|---|
-| **Icarus** | Personal AI OS — orchestrates everything from Telegram |
+| **Icarus** | Personal AI OS (orchestrates everything from Telegram) |
 | **SpendLens** | Spend analytics, vendor records, approval workflows |
-| **Hades** | Autonomous supplier due diligence — gates vendor onboarding |
-| **Hermes** | Ongoing market intelligence — crawls signals, monitors watchlist |
+| **Hades** | Autonomous supplier due diligence, gates vendor onboarding |
+| **Hermes** | Ongoing market intelligence: crawls signals, monitors watchlist |
